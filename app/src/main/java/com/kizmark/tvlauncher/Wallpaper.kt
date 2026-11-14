@@ -30,6 +30,12 @@ import kotlin.math.sin
 
 val WALLPAPER_NAMES = listOf("Gece gölü", "Aurora", "Gün batımı", "Derin mavi")
 
+/** Her hazır duvar kağıdının vurgu rengi (odak ışığı, kenar parlaması, dock tonu). */
+val WALLPAPER_ACCENTS = listOf(Color(0xFF8FB4FF), Color(0xFF34E8A0), Color(0xFFFFB067), Color(0xFF6C8CFF))
+
+/** Bu hazır duvar kağıdında saat dağların arkasına girebilir mi? */
+fun hasProceduralDepth(style: Int): Boolean = style == 0 || style == 2
+
 class WallCache(val ridges: List<Path>, val stars: FloatArray)
 
 private fun buildRidge(w: Float, h: Float, base: Float, amp: Float, seed: Long): Path {
@@ -58,7 +64,7 @@ private fun buildRidge(w: Float, h: Float, base: Float, amp: Float, seed: Long):
 fun buildWallCache(style: Int, w: Float, h: Float): WallCache {
     val ridges = when (style) {
         0 -> listOf(
-            buildRidge(w, h, 0.70f, 0.17f, 11L),
+            buildRidge(w, h, 0.70f, 0.24f, 11L),
             buildRidge(w, h, 0.70f, 0.10f, 23L),
             buildRidge(w, h, 0.70f, 0.05f, 37L)
         )
@@ -68,7 +74,7 @@ fun buildWallCache(style: Int, w: Float, h: Float): WallCache {
             buildRidge(w, h, 1.00f, 0.08f, 15L)
         )
         2 -> listOf(
-            buildRidge(w, h, 0.66f, 0.18f, 41L),
+            buildRidge(w, h, 0.66f, 0.24f, 41L),
             buildRidge(w, h, 0.66f, 0.11f, 43L),
             buildRidge(w, h, 0.66f, 0.05f, 47L)
         )
@@ -148,24 +154,30 @@ private fun DrawScope.ripples(color: Color, horizon: Float) {
     }
 }
 
-fun DrawScope.drawWallpaper(style: Int, detail: Boolean, cache: WallCache) {
+/**
+ * part = 0: tüm sahne. part = 1: yalnızca ön plan (dağlar ve su); saatin üstüne çizilir.
+ */
+fun DrawScope.drawWallpaper(style: Int, detail: Boolean, cache: WallCache, part: Int = 0) {
+    val all = part == 0
     val w = size.width
     val h = size.height
     when (style) {
         // Gece gölü
         0 -> {
             val horizon = h * 0.70f
-            drawRect(
-                Brush.verticalGradient(
-                    listOf(Color(0xFF040817), Color(0xFF0A1A3A), Color(0xFF1C3C62)),
-                    startY = 0f, endY = horizon
+            val mx = w * 0.80f
+            val my = h * 0.20f
+            if (all) {
+                drawRect(
+                    Brush.verticalGradient(
+                        listOf(Color(0xFF040817), Color(0xFF0A1A3A), Color(0xFF1C3C62)),
+                        startY = 0f, endY = horizon
+                    )
                 )
-            )
-            val mx = w * 0.76f
-            val my = h * 0.22f
-            glow(Color(0x66BFD8FF), mx, my, w * 0.28f)
-            if (detail) stars(cache, 0.60f)
-            drawCircle(Color(0xFFEFF5FF), radius = w * 0.022f, center = Offset(mx, my))
+                glow(Color(0x66BFD8FF), mx, my, w * 0.28f)
+                if (detail) stars(cache, 0.60f)
+                drawCircle(Color(0xFFEFF5FF), radius = w * 0.022f, center = Offset(mx, my))
+            }
             val colors = listOf(Color(0xFF16305A), Color(0xFF0D1F3D), Color(0xFF071224))
             cache.ridges.forEachIndexed { i, p -> drawPath(p, colors[i % colors.size]) }
             drawRect(
@@ -207,16 +219,18 @@ fun DrawScope.drawWallpaper(style: Int, detail: Boolean, cache: WallCache) {
         // Gün batımı
         2 -> {
             val horizon = h * 0.66f
-            drawRect(
-                Brush.verticalGradient(
-                    listOf(Color(0xFF1A1036), Color(0xFF6A2A5F), Color(0xFFE0664B), Color(0xFFF6B56B)),
-                    startY = 0f, endY = horizon
-                )
-            )
             val sx = w * 0.5f
             val sy = h * 0.58f
-            glow(Color(0x99FFD08A), sx, sy, w * 0.30f)
-            drawCircle(Color(0xFFFFE9B8), radius = w * 0.045f, center = Offset(sx, sy))
+            if (all) {
+                drawRect(
+                    Brush.verticalGradient(
+                        listOf(Color(0xFF1A1036), Color(0xFF6A2A5F), Color(0xFFE0664B), Color(0xFFF6B56B)),
+                        startY = 0f, endY = horizon
+                    )
+                )
+                glow(Color(0x99FFD08A), sx, sy, w * 0.30f)
+                drawCircle(Color(0xFFFFE9B8), radius = w * 0.045f, center = Offset(sx, sy))
+            }
             val colors = listOf(Color(0xFF5A2456), Color(0xFF34163F), Color(0xFF190B26))
             cache.ridges.forEachIndexed { i, p -> drawPath(p, colors[i % colors.size]) }
             drawRect(
@@ -262,7 +276,7 @@ fun renderBackdrop(style: Int, custom: ImageBitmap?): ImageBitmap {
         GCanvas(img),
         Size(w.toFloat(), h.toFloat())
     ) {
-        drawWallpaper(style, false, cache)
+        drawWallpaper(style, false, cache, 0)
     }
     return img
 }
@@ -283,7 +297,33 @@ fun Wallpaper(style: Int, custom: ImageBitmap?) {
                     .fillMaxSize()
                     .drawWithCache {
                         val cache = buildWallCache(style, size.width, size.height)
-                        onDrawBehind { drawWallpaper(style, true, cache) }
+                        onDrawBehind { drawWallpaper(style, true, cache, 0) }
+                    }
+            )
+        }
+    }
+}
+
+/** Saatin ÜSTÜNE çizilen ön plan: fotoğrafta kayalar, hazır manzaralarda dağlar ve su. */
+@Composable
+fun WallpaperForeground(style: Int, customFg: ImageBitmap?) {
+    if (style < 0) {
+        if (customFg != null) {
+            Image(
+                bitmap = customFg,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    } else if (hasProceduralDepth(style)) {
+        key(style) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .drawWithCache {
+                        val cache = buildWallCache(style, size.width, size.height)
+                        onDrawBehind { drawWallpaper(style, true, cache, 1) }
                     }
             )
         }

@@ -1,6 +1,7 @@
 package com.kizmark.tvlauncher
 
 import android.app.ActivityManager
+import android.app.ActivityOptions
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -13,11 +14,15 @@ import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.os.Bundle
 import android.os.Environment
 import android.os.StatFs
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
+import android.view.View
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.toBitmap
 import java.util.Locale
@@ -38,6 +43,12 @@ object Config {
 
     /** Bu kadar dakika tuşa basılmazsa saat moduna geçer. 0 = kapalı. */
     const val AMBIENT_AFTER_MIN = 5
+
+    /**
+     * true: TV uygulamalara 4K (veya daha yüksek) bir ekran modu sunuyorsa arayüz o modda çizilir.
+     * Launcher'a girip çıkarken ekran kısa süre kararıyorsa false yap.
+     */
+    const val PREFER_4K = true
 }
 
 // ---------------------------------------------------------------------------
@@ -67,22 +78,26 @@ object AppRepo {
         val infos = (leanback + normal)
             .filter { it.activityInfo.packageName != ctx.packageName }
             .distinctBy { it.activityInfo.packageName }
-        val newSignature = infos.map { it.activityInfo.packageName }.sorted()
+        // Görseller ekran yoğunluğuna göre yüklenir: 4K modda kutucuklar bulanık kalmaz
+        val density = ctx.resources.displayMetrics.density
+        val bannerW = (176f * density).toInt().coerceIn(320, 800)
+        val iconSize = (96f * density).toInt().coerceIn(192, 384)
+        val newSignature = infos.map { it.activityInfo.packageName }.sorted() + ("@" + bannerW)
         if (newSignature == signature && cache.isNotEmpty()) return cache
-        val items = infos.mapNotNull { toItem(ctx, it) }.sortedBy { it.label.lowercase() }
+        val items = infos.mapNotNull { toItem(ctx, it, bannerW, iconSize) }.sortedBy { it.label.lowercase() }
         signature = newSignature
         cache = items
         return items
     }
 
-    private fun toItem(ctx: Context, ri: ResolveInfo): AppItem? {
+    private fun toItem(ctx: Context, ri: ResolveInfo, bannerW: Int, iconSize: Int): AppItem? {
         return try {
             val pm = ctx.packageManager
             val pkg = ri.activityInfo.packageName
             val banner = ri.activityInfo.loadBanner(pm)
             val isBanner = banner != null
             val drawable = banner ?: ri.loadIcon(pm)
-            val bmp = if (isBanner) drawable.toBitmap(400, 225) else drawable.toBitmap(192, 192)
+            val bmp = if (isBanner) drawable.toBitmap(bannerW, bannerW * 9 / 16) else drawable.toBitmap(iconSize, iconSize)
             val intent = pm.getLeanbackLaunchIntentForPackage(pkg) ?: pm.getLaunchIntentForPackage(pkg)
             intent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             AppItem(pkg, ri.loadLabel(pm).toString(), bmp.asImageBitmap(), isBanner, intent)
@@ -92,9 +107,26 @@ object AppRepo {
     }
 }
 
-fun launchApp(ctx: Context, item: AppItem) {
-    val intent = item.intent ?: return
-    runCatching { ctx.startActivity(intent) }
+/** Uygulamayı açar. options: açılış animasyonu (kutucuktan büyüyerek). Açılamazsa false döner. */
+fun launchApp(ctx: Context, item: AppItem, options: Bundle? = null): Boolean {
+    val intent = item.intent ?: return false
+    return try {
+        ctx.startActivity(intent, options)
+        true
+    } catch (e: Throwable) {
+        runCatching { ctx.startActivity(intent) }.isSuccess
+    }
+}
+
+/** Açılan uygulamanın penceresi, basılan kutucuğun yerinden büyüyerek gelir. */
+fun launchOptions(view: View, x: Float, y: Float, w: Float, h: Float): Bundle? {
+    return try {
+        ActivityOptions.makeScaleUpAnimation(
+            view, x.toInt(), y.toInt(), w.toInt().coerceAtLeast(1), h.toInt().coerceAtLeast(1)
+        ).toBundle()
+    } catch (e: Throwable) {
+        null
+    }
 }
 
 fun launchPackage(ctx: Context, pkg: String) {
@@ -136,10 +168,16 @@ class Prefs(ctx: Context) {
         sp.edit().putInt("wall", index).apply()
     }
 
-    fun boldClock(): Boolean = sp.getBoolean("bold", false)
+    fun boldClock(): Boolean = sp.getBoolean("bold", true)
 
     fun saveBoldClock(bold: Boolean) {
         sp.edit().putBoolean("bold", bold).apply()
+    }
+
+    fun depth(): Boolean = sp.getBoolean("depth", true)
+
+    fun saveDepth(on: Boolean) {
+        sp.edit().putBoolean("depth", on).apply()
     }
 }
 
@@ -176,11 +214,13 @@ fun networkLabel(ctx: Context): String {
 }
 
 // ---------------------------------------------------------------------------
-// Kendi duvar kağıdın: app/src/main/res/drawable-nodpi/wallpaper.jpg (veya .png)
+// Duvar kağıdı dosyaları (app/src/main/res/drawable-nodpi/)
+//   wallpaper.jpg     : arka plan fotoğrafı
+//   wallpaper_fg.png  : aynı fotoğrafın saydam zeminli ön planı (derinlik efekti için)
 // ---------------------------------------------------------------------------
-fun loadCustomWallpaper(ctx: Context): ImageBitmap? {
+fun loadDrawableBitmap(ctx: Context, name: String): ImageBitmap? {
     return try {
-        val id = ctx.resources.getIdentifier("wallpaper", "drawable", ctx.packageName)
+        val id = ctx.resources.getIdentifier(name, "drawable", ctx.packageName)
         if (id == 0) {
             null
         } else {
@@ -188,7 +228,7 @@ fun loadCustomWallpaper(ctx: Context): ImageBitmap? {
             bounds.inJustDecodeBounds = true
             BitmapFactory.decodeResource(ctx.resources, id, bounds)
             var sample = 1
-            while (bounds.outWidth / sample > 2400) sample *= 2
+            while (bounds.outWidth / sample > 3840) sample *= 2
             val opts = BitmapFactory.Options()
             opts.inSampleSize = sample
             opts.inScaled = false
@@ -196,6 +236,36 @@ fun loadCustomWallpaper(ctx: Context): ImageBitmap? {
         }
     } catch (e: Throwable) {
         null
+    }
+}
+
+/** Fotoğraftaki baskın canlı rengi bulur; arayüzün vurgu rengi olur. */
+fun accentFromBitmap(image: ImageBitmap): Color {
+    return try {
+        val small = Bitmap.createScaledBitmap(image.asAndroidBitmap(), 48, 27, true)
+        val hsv = FloatArray(3)
+        var sx = 0.0
+        var sy = 0.0
+        var total = 0.0
+        for (y in 0 until small.height) {
+            for (x in 0 until small.width) {
+                android.graphics.Color.colorToHSV(small.getPixel(x, y), hsv)
+                val weight = (hsv[1] * hsv[1] * hsv[2]).toDouble()
+                val angle = Math.toRadians(hsv[0].toDouble())
+                sx += Math.cos(angle) * weight
+                sy += Math.sin(angle) * weight
+                total += weight
+            }
+        }
+        if (total < 0.5) {
+            Color(0xFF8FB4FF)
+        } else {
+            var hue = Math.toDegrees(Math.atan2(sy, sx)).toFloat()
+            if (hue < 0f) hue += 360f
+            Color.hsv(hue.coerceIn(0f, 359.9f), 0.70f, 0.84f)
+        }
+    } catch (e: Throwable) {
+        Color(0xFF34D399)
     }
 }
 

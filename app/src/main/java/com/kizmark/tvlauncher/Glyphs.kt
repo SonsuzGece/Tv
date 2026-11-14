@@ -18,7 +18,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 enum class Glyph {
-    GRID, SLIDERS, PLAY, PAUSE, NEXT, PREV, WIFI, SPEAKER, IMAGE, CLOCK, DISPLAY, BAG, GEAR, TYPE, MUSIC
+    GRID, SLIDERS, PLAY, PAUSE, NEXT, PREV, WIFI, SPEAKER, IMAGE, CLOCK, DISPLAY, BAG, GEAR, TYPE, MUSIC, LAYERS
 }
 
 @Composable
@@ -143,6 +143,14 @@ fun DrawScope.drawGlyph(g: Glyph, c: Color) {
             seg(0.24f, 0.80f, 0.50f, 0.20f)
             seg(0.50f, 0.20f, 0.76f, 0.80f)
             seg(0.34f, 0.58f, 0.66f, 0.58f)
+        }
+        Glyph.LAYERS -> {
+            seg(0.50f, 0.16f, 0.86f, 0.36f)
+            seg(0.86f, 0.36f, 0.50f, 0.56f)
+            seg(0.50f, 0.56f, 0.14f, 0.36f)
+            seg(0.14f, 0.36f, 0.50f, 0.16f)
+            seg(0.14f, 0.58f, 0.50f, 0.80f)
+            seg(0.50f, 0.80f, 0.86f, 0.58f)
         }
         Glyph.MUSIC -> {
             drawCircle(c, radius = s * 0.13f, center = p(0.36f, 0.72f))
