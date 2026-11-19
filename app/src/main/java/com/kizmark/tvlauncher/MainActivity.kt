@@ -1,6 +1,10 @@
 package com.kizmark.tvlauncher
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 import android.os.Bundle
 import android.view.Display
 import android.view.KeyEvent
@@ -13,59 +17,101 @@ import androidx.compose.runtime.setValue
 import kotlin.math.abs
 
 enum class Overlay { NONE, APPS, CONTROL }
+enum class SheetKind { INPUTS, NOTIFS, POWER, APP_MENU }
 
-class LauncherState(ctx: Context) {
-    private val prefs = Prefs(ctx)
+class LauncherState(val ctx: Context) {
+    val prefs = Prefs(ctx)
 
     var overlay by mutableStateOf(Overlay.NONE)
+    var sheet by mutableStateOf<SheetKind?>(null)
+    var sheetApp by mutableStateOf<AppItem?>(null)
+    var sheetFromDock = false
     var ambient by mutableStateOf(false)
+    var resumed by mutableStateOf(false)
 
-    /** Bir uygulama açılırken true olur: arayüz çekilir, sahne yakınlaşır. Geri dönünce false. */
-    var launching by mutableStateOf(false)
+    /** Tüm uygulamalar (alfabetik) ve kullanıcının sırası. Dock bu sıradan oluşur. */
+    var apps by mutableStateOf<List<AppItem>>(emptyList())
+    var order by mutableStateOf(prefs.order() ?: emptyList())
+    var hidden by mutableStateOf(prefs.hidden())
+    var appsVersion by mutableIntStateOf(0)
+    var changedPkg: String? = null
+
+    var dockIndex by mutableIntStateOf(0)
+    var dockFirst by mutableIntStateOf(0)
+    var moving by mutableStateOf(false)
+
     var wallIndex by mutableIntStateOf(prefs.wallpaper())
     var boldClock by mutableStateOf(prefs.boldClock())
     var depth by mutableStateOf(prefs.depth())
+    var wallCount = 1
 
-    /** Her odak değişiminde artar; kenar parlamasını tetikler. */
-    var pulse by mutableIntStateOf(0)
-    var favorites by mutableStateOf(prefs.favorites() ?: emptyList())
-    var resumeTick by mutableIntStateOf(0)
+    var toast by mutableStateOf<String?>(null)
+    var toastId by mutableIntStateOf(0)
+    var sys by mutableStateOf<Map<String, Boolean>?>(null)
+    var adbBusy by mutableStateOf(false)
     var homeTick by mutableIntStateOf(0)
+    var refocusTick by mutableIntStateOf(0)
 
     var lastInput = System.currentTimeMillis()
-    var resumed = false
-    var wallCount = WALLPAPER_NAMES.size
-    private var favoritesSaved = prefs.favorites() != null
 
-    /** İlk açılışta: varsayılanlardan kurulu olanları çubuğa koy. */
-    fun ensureFavorites(installed: List<String>) {
-        if (favoritesSaved) return
-        val set = installed.toSet()
-        var list = Config.DEFAULT_FAVORITES.filter { it in set }
-        if (list.size < 3) list = (list + installed.filter { it !in list }).take(6)
-        favorites = list
-        prefs.saveFavorites(list)
-        favoritesSaved = true
+    /** Uygulama listesi değişince sırayı günceller: yeni uygulamalar sona eklenir. */
+    fun syncOrder(list: List<AppItem>) {
+        val installed = list.map { it.pkg }.toSet()
+        val base = if (order.isEmpty()) {
+            Config.DEFAULT_ORDER.filter { it in installed }
+        } else {
+            order.filter { it in installed }
+        }
+        val rest = list.map { it.pkg }.filter { it !in base }
+        val next = base + rest
+        if (next != order) {
+            order = next
+            prefs.saveOrder(next)
+        }
     }
 
-    fun toggleFavorite(pkg: String) {
-        favorites = if (pkg in favorites) favorites - pkg else favorites + pkg
-        prefs.saveFavorites(favorites)
-        favoritesSaved = true
+    fun dockApps(): List<AppItem> {
+        val by = apps.associateBy { it.pkg }
+        return order.mapNotNull { by[it] }.filter { it.pkg !in hidden }
     }
 
-    fun moveFavoriteLeft(pkg: String) {
-        val i = favorites.indexOf(pkg)
-        if (i < 0 || favorites.size < 2) return
-        val list = favorites.toMutableList()
-        list.removeAt(i)
-        list.add(if (i == 0) list.size else i - 1, pkg)
-        favorites = list
-        prefs.saveFavorites(list)
+    fun allAppsOrdered(): List<AppItem> {
+        val by = apps.associateBy { it.pkg }
+        val shown = order.mapNotNull { by[it] }
+        return shown.filter { it.pkg !in hidden } + shown.filter { it.pkg in hidden }
+    }
+
+    /** Dock'taki iki komşu uygulamanın yerini değiştirir (Taşı modu). */
+    fun swap(a: String, b: String) {
+        val list = order.toMutableList()
+        val i = list.indexOf(a)
+        val j = list.indexOf(b)
+        if (i < 0 || j < 0) return
+        list[i] = b
+        list[j] = a
+        order = list
+    }
+
+    fun finishMove() {
+        moving = false
+        prefs.saveOrder(order)
+        say("Sıralama kaydedildi")
+    }
+
+    fun moveToFront(pkg: String) {
+        order = listOf(pkg) + order.filter { it != pkg }
+        prefs.saveOrder(order)
+        dockIndex = 0
+        dockFirst = 0
+    }
+
+    fun toggleHidden(pkg: String) {
+        hidden = if (pkg in hidden) hidden - pkg else hidden + pkg
+        prefs.saveHidden(hidden)
     }
 
     fun nextWallpaper() {
-        wallIndex = (wallIndex + 1) % wallCount
+        wallIndex = (wallIndex + 1) % wallCount.coerceAtLeast(1)
         prefs.saveWallpaper(wallIndex)
     }
 
@@ -78,38 +124,84 @@ class LauncherState(ctx: Context) {
         boldClock = !boldClock
         prefs.saveBoldClock(boldClock)
     }
+
+    fun say(msg: String) {
+        toast = msg
+        toastId += 1
+    }
+
+    fun closeSheet() {
+        sheet = null
+        sheetApp = null
+        refocusTick += 1
+    }
+
+    fun goHome() {
+        val alreadyHome = overlay == Overlay.NONE && sheet == null && !ambient
+        overlay = Overlay.NONE
+        sheet = null
+        sheetApp = null
+        ambient = false
+        if (moving) finishMove()
+        if (alreadyHome) {
+            dockIndex = 0
+            dockFirst = 0
+        }
+        homeTick += 1
+    }
 }
 
 class MainActivity : ComponentActivity() {
     private lateinit var st: LauncherState
 
+    private val packageReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            st.changedPkg = intent.data?.schemeSpecificPart
+            st.appsVersion += 1
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         st = LauncherState(applicationContext)
-        // Home tuşuna tekrar basılınca ana ekrana dön
-        addOnNewIntentListener {
-            st.overlay = Overlay.NONE
-            st.ambient = false
-            st.launching = false
-            st.homeTick += 1
-        }
+        addOnNewIntentListener { st.goHome() }
         if (Config.PREFER_4K) requestBestDisplayMode()
         setContent { LauncherApp(st) }
+        // Sahne tüm ekranı kapladığı için pencere zemini boşuna çizilmesin
+        window.setBackgroundDrawable(null)
+
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_CHANGED)
+            addAction(Intent.ACTION_PACKAGE_REPLACED)
+            addDataScheme("package")
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(packageReceiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(packageReceiver, filter)
+        }
+    }
+
+    override fun onDestroy() {
+        runCatching { unregisterReceiver(packageReceiver) }
+        super.onDestroy()
     }
 
     override fun onResume() {
         super.onResume()
         st.resumed = true
         st.ambient = false
-        st.launching = false
         st.lastInput = System.currentTimeMillis()
-        st.resumeTick += 1
     }
 
-    /**
-     * TV'nin uygulamalara sunduğu en yüksek çözünürlüklü ekran modunu ister (ör. 3840x2160).
-     * TV yalnızca 1080p arayüz modu sunuyorsa hiçbir şey değişmez.
-     */
+    override fun onPause() {
+        super.onPause()
+        st.resumed = false
+    }
+
+    /** TV'nin uygulamalara sunduğu en yüksek çözünürlüklü ekran modunu ister. */
     private fun requestBestDisplayMode() {
         try {
             @Suppress("DEPRECATION")
@@ -138,22 +230,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onPause() {
-        super.onPause()
-        st.resumed = false
-    }
-
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         st.lastInput = System.currentTimeMillis()
 
         // Saat modundayken herhangi bir tuş geri döndürür
         if (st.ambient) {
-            if (event.action == KeyEvent.ACTION_DOWN) st.ambient = false
+            if (event.action == KeyEvent.ACTION_UP) st.ambient = false
             return true
         }
 
-        // Kumanda kısayolları (sadece ana ekrandayken çalışır)
-        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && st.sheet == null) {
             when (event.keyCode) {
                 KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_PROG_RED -> {
                     st.overlay = if (st.overlay == Overlay.CONTROL) Overlay.NONE else Overlay.CONTROL
