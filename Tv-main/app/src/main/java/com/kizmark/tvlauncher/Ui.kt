@@ -66,7 +66,6 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.inset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -342,14 +341,15 @@ fun LauncherApp(st: LauncherState) {
                 Modifier.fillMaxSize().drawBehind {
                     val a = ccAmt.value
                     val b = ambAmt.value
+                    val dst = IntSize(size.width.toInt().coerceAtLeast(1), size.height.toInt().coerceAtLeast(1))
                     if (homeImg == null) {
                         drawRect(Color.Black)
                     } else if (a < 1f && b < 1f) {
-                        drawImage(homeImg)
+                        drawImage(homeImg, dstSize = dst, filterQuality = FilterQuality.Medium)
                     }
-                    if (ctrlImg != null && a > 0f) drawImage(ctrlImg, alpha = a)
+                    if (ctrlImg != null && a > 0f) drawImage(ctrlImg, dstSize = dst, alpha = a, filterQuality = FilterQuality.Medium)
                     if (bareImg != null && b > 0f) {
-                        drawImage(bareImg, alpha = b)
+                        drawImage(bareImg, dstSize = dst, alpha = b, filterQuality = FilterQuality.Medium)
                         drawRect(Color.Black, alpha = 0.22f * b)
                     }
                 }
@@ -416,7 +416,7 @@ fun HomeUi(st: LauncherState, media: MediaInfo?, p: State<Float>, dockReq: Focus
             NowPlayingPill(media, Modifier.align(Alignment.TopStart).padding(start = 40.dp, top = 28.dp))
         }
 
-        var net by remember { mutableStateOf(networkInfo(ctx)) }
+        var net by remember { mutableStateOf(NetInfo("Wi-Fi", "", Glyph.WIFI)) }
         LaunchedEffect(st.resumed) {
             while (st.resumed) {
                 net = withContext(Dispatchers.IO) { networkInfo(ctx) }
@@ -606,20 +606,20 @@ fun BoxScope.Dock(st: LauncherState, req: FocusRequester, w: Int, h: Int) {
 @Composable
 fun DockTile(item: AppItem, xDp: Float, sel: Boolean, moving: Boolean) {
     val accent = LocalAccent.current
-    val z by animateFloatAsState(
+    val z = animateFloatAsState(
         if (sel) 1.08f else 1f,
         spring(dampingRatio = 0.72f, stiffness = 650f),
         label = "tile"
     )
-    val lift by animateFloatAsState(if (moving) 1f else 0f, tween(160), label = "lift")
+    val lift = animateFloatAsState(if (moving) 1f else 0f, tween(160), label = "lift")
     Box(
         Modifier
             .offset(x = xDp.dp, y = Dims.PAD.dp)
             .size(Dims.TILE_W.dp, Dims.TILE_H.dp)
             .graphicsLayer {
-                scaleX = z
-                scaleY = z
-                translationY = -lift * 7.dp.toPx()
+                scaleX = z.value
+                scaleY = z.value
+                translationY = -lift.value * 7.dp.toPx()
             }
             .drawBehind {
                 val r = CornerRadius(size.height * 0.16f)
@@ -647,29 +647,25 @@ fun DockTile(item: AppItem, xDp: Float, sel: Boolean, moving: Boolean) {
                         cornerRadius = r
                     )
                 }
-                if (moving) {
-                    val s = 16.dp.toPx()
-                    inset(-s - 4.dp.toPx(), (size.height - s) / 2f, size.width + 4.dp.toPx(), (size.height - s) / 2f) {
-                        drawGlyph(Glyph.LEFT, Color.White)
-                    }
-                    inset(size.width + 4.dp.toPx(), (size.height - s) / 2f, -s - 4.dp.toPx(), (size.height - s) / 2f) {
-                        drawGlyph(Glyph.RIGHT, Color.White)
-                    }
-                }
             }
-    )
+    ) {
+        if (moving) {
+            GlyphIcon(Glyph.LEFT, 16.dp, Color.White, Modifier.align(Alignment.CenterStart).offset(x = (-20).dp))
+            GlyphIcon(Glyph.RIGHT, 16.dp, Color.White, Modifier.align(Alignment.CenterEnd).offset(x = 20.dp))
+        }
+    }
 }
 
 @Composable
 fun PillButton(glyph: Glyph, text: String, onClick: () -> Unit) {
     val accent = LocalAccent.current
     var f by remember { mutableStateOf(false) }
-    val z by animateFloatAsState(if (f) 1.08f else 1f, spring(dampingRatio = 0.72f, stiffness = 680f), label = "pill")
+    val z = animateFloatAsState(if (f) 1.08f else 1f, spring(dampingRatio = 0.72f, stiffness = 680f), label = "pill")
     val shape = RoundedCornerShape(21.dp)
     Row(
         Modifier
             .height(42.dp)
-            .graphicsLayer { scaleX = z; scaleY = z }
+            .graphicsLayer { scaleX = z.value; scaleY = z.value }
             .drawBehind {
                 if (f) {
                     val g = 5.dp.toPx()
@@ -714,11 +710,11 @@ fun RoundButton(
 ) {
     val accent = LocalAccent.current
     var f by remember { mutableStateOf(false) }
-    val z by animateFloatAsState(if (f) 1.12f else 1f, spring(dampingRatio = 0.68f, stiffness = 680f), label = "round")
+    val z = animateFloatAsState(if (f) 1.12f else 1f, spring(dampingRatio = 0.68f, stiffness = 680f), label = "round")
     Box(
         Modifier
             .size(size)
-            .graphicsLayer { scaleX = z; scaleY = z }
+            .graphicsLayer { scaleX = z.value; scaleY = z.value }
             .drawBehind {
                 if (f) {
                     drawCircle(accent.copy(alpha = 0.30f), radius = this.size.minDimension / 2f + 5.dp.toPx())
@@ -848,13 +844,13 @@ fun AppsOverlay(st: LauncherState, p: State<Float>) {
 @Composable
 fun GridTile(item: AppItem, hidden: Boolean, requester: FocusRequester?, onClick: () -> Unit, onLong: () -> Unit) {
     var f by remember { mutableStateOf(false) }
-    val z by animateFloatAsState(if (f) 1.1f else 1f, spring(dampingRatio = 0.72f, stiffness = 650f), label = "grid")
+    val z = animateFloatAsState(if (f) 1.1f else 1f, spring(dampingRatio = 0.72f, stiffness = 650f), label = "grid")
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier
                 .fillMaxWidth()
                 .height(Dims.TILE_H.dp)
-                .graphicsLayer { scaleX = z; scaleY = z; alpha = if (hidden && !f) 0.55f else 1f }
+                .graphicsLayer { scaleX = z.value; scaleY = z.value; alpha = if (hidden && !f) 0.55f else 1f }
                 .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
                 .onFocusChanged { f = it.isFocused }
                 .then(tvKeys(onClick, onLong))
@@ -871,15 +867,22 @@ fun GridTile(item: AppItem, hidden: Boolean, requester: FocusRequester?, onClick
                         drawRoundRect(Color(0x33FFFFFF), cornerRadius = r)
                     }
                     if (f) drawRoundRect(Color.White, style = Stroke(2.5.dp.toPx()), cornerRadius = r)
-                    if (hidden) {
-                        val s = 18.dp.toPx()
-                        inset(size.width - s - 6.dp.toPx(), 6.dp.toPx(), 6.dp.toPx(), size.height - s - 6.dp.toPx()) {
-                            drawCircle(Color(0xCC000000), radius = s * 0.62f)
-                            drawGlyph(Glyph.EYE_OFF, Color.White)
-                        }
-                    }
                 }
-        )
+        ) {
+            if (hidden) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xCC000000)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    GlyphIcon(Glyph.EYE_OFF, 14.dp, Color.White)
+                }
+            }
+        }
         Spacer(Modifier.height(7.dp))
         BasicText(
             item.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -916,11 +919,11 @@ fun ControlPanel(st: LauncherState, media: MediaInfo?, p: State<Float>, thumb: I
     }
 
     // Durumlar panel açılınca bir kez okunur
-    var net by remember { mutableStateOf(networkInfo(ctx)) }
+    var net by remember { mutableStateOf(NetInfo("Wi-Fi", "", Glyph.WIFI)) }
     var audio by remember { mutableStateOf("") }
     var bt by remember { mutableStateOf<Boolean?>(null) }
     var ram by remember { mutableStateOf(0L) }
-    var sleepLeft by remember { mutableStateOf(SleepTimer.remainingMin(ctx)) }
+    var sleepLeft by remember { mutableStateOf(0) }
     var sources by remember { mutableStateOf<List<TvSource>>(emptyList()) }
     val notifVersion = NotifBus.version
     var notifCount by remember { mutableStateOf(0) }
@@ -930,6 +933,7 @@ fun ControlPanel(st: LauncherState, media: MediaInfo?, p: State<Float>, thumb: I
             audio = audioInfo(ctx)
             bt = bluetoothOn(ctx)
             ram = freeRamMb(ctx)
+            sleepLeft = SleepTimer.remainingMin(ctx)
             sources = tvSources(ctx)
         }
         if (st.prefs.adbReady()) st.sys = withContext(Dispatchers.IO) { SysToggles.query(ctx) }
@@ -1126,7 +1130,7 @@ fun CcTile(
 ) {
     val accent = LocalAccent.current
     var f by remember { mutableStateOf(false) }
-    val z by animateFloatAsState(if (f) 1.04f else 1f, spring(dampingRatio = 0.7f, stiffness = 700f), label = "cc")
+    val z = animateFloatAsState(if (f) 1.04f else 1f, spring(dampingRatio = 0.7f, stiffness = 700f), label = "cc")
     val shape = RoundedCornerShape(22.dp)
     val bg = when {
         f -> Color(0xF2FFFFFF)
@@ -1141,7 +1145,7 @@ fun CcTile(
     Row(
         modifier
             .height(66.dp)
-            .graphicsLayer { scaleX = z; scaleY = z }
+            .graphicsLayer { scaleX = z.value; scaleY = z.value }
             .clip(shape)
             .background(bg)
             .border(1.dp, edge, shape)

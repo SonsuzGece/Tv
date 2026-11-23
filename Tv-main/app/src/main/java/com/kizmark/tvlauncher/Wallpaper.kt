@@ -1,6 +1,7 @@
 package com.kizmark.tvlauncher
 
 import android.graphics.Bitmap
+import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,24 +32,24 @@ import kotlin.math.sin
 class WallpaperItem(
     val id: String,
     val name: String,
-    val drawable: String? = null,
-    val fgDrawable: String? = null,
+    @DrawableRes val drawableRes: Int = 0,
+    @DrawableRes val fgDrawableRes: Int = 0,
     val proceduralStyle: Int = -1,
     val clockX: Float = 0.50f,
     val clockY: Float = 0.50f,
     val inRandomPool: Boolean = true
 ) {
-    val isPhoto: Boolean get() = drawable != null
-    val supportsDepth: Boolean get() = fgDrawable != null || (!isPhoto && hasProceduralDepth(proceduralStyle))
+    val isPhoto: Boolean get() = drawableRes != 0
+    val supportsDepth: Boolean get() = fgDrawableRes != 0 || (!isPhoto && hasProceduralDepth(proceduralStyle))
 }
 
 val WALLPAPER_CATALOG = listOf(
-    WallpaperItem("ocean", "Okyanus", "wp_ocean", null, clockX = 0.50f, clockY = 0.50f, inRandomPool = true),
-    WallpaperItem("luffy", "Mavi Ada", "wp_luffy", null, clockX = 0.50f, clockY = 0.43f, inRandomPool = true),
-    WallpaperItem("dubai", "Dubai", "wp_dubai", "wp_dubai_fg", clockX = 0.50f, clockY = 0.49f, inRandomPool = true),
-    WallpaperItem("mountain", "Gece Dağı", "wp_mountain", "wp_mountain_fg", clockX = 0.50f, clockY = 0.40f, inRandomPool = true),
-    WallpaperItem("knight", "Şövalye", "wp_knight", null, clockX = 0.69f, clockY = 0.40f, inRandomPool = true),
-    WallpaperItem("rocks", "Kaya Gölü", "wallpaper", "wallpaper_fg", clockX = 0.50f, clockY = 0.50f, inRandomPool = true),
+    WallpaperItem("ocean", "Okyanus", R.drawable.wp_ocean, 0, clockX = 0.50f, clockY = 0.50f, inRandomPool = true),
+    WallpaperItem("luffy", "Mavi Ada", R.drawable.wp_luffy, 0, clockX = 0.50f, clockY = 0.43f, inRandomPool = true),
+    WallpaperItem("dubai", "Dubai", R.drawable.wp_dubai, R.drawable.wp_dubai_fg, clockX = 0.50f, clockY = 0.49f, inRandomPool = true),
+    WallpaperItem("mountain", "Gece Dağı", R.drawable.wp_mountain, R.drawable.wp_mountain_fg, clockX = 0.50f, clockY = 0.40f, inRandomPool = true),
+    WallpaperItem("knight", "Şövalye", R.drawable.wp_knight, 0, clockX = 0.69f, clockY = 0.40f, inRandomPool = true),
+    WallpaperItem("rocks", "Kaya Gölü", R.drawable.wallpaper, R.drawable.wallpaper_fg, clockX = 0.50f, clockY = 0.50f, inRandomPool = true),
     WallpaperItem("night_lake", "Gece gölü", proceduralStyle = 0, inRandomPool = false),
     WallpaperItem("aurora", "Aurora", proceduralStyle = 1, inRandomPool = false),
     WallpaperItem("sunset", "Gün batımı", proceduralStyle = 2, inRandomPool = false),

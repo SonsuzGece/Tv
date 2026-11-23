@@ -224,7 +224,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         st = LauncherState(applicationContext)
-        st.initWallpapers(SceneBaker(applicationContext).availableWallpapers())
+        st.initWallpapers(WALLPAPER_CATALOG)
         addOnNewIntentListener { st.goHome() }
         if (Config.PREFER_4K) requestBestDisplayMode()
         setContent { LauncherApp(st) }

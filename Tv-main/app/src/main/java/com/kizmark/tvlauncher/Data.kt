@@ -164,6 +164,7 @@ object AppRepo {
             val icon = ai.loadIcon(pm)
             val iconBmp = icon.toBitmap(96, 96)
             val base = dominantColor(iconBmp)
+            iconBmp.recycle()
             val p = Paint(Paint.ANTI_ALIAS_FLAG)
             p.shader = LinearGradient(
                 0f, 0f, 0f, h.toFloat(),
