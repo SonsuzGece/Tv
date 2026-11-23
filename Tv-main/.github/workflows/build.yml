@@ -1,0 +1,59 @@
+name: Zip ac ve APK derle
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Kokte .zip varsa klasorlere ac, sonra zip'i sil ve depoya kaydet
+      - name: ZIP varsa ac ve sil
+        run: |
+          shopt -s nullglob
+          zips=(*.zip)
+          if [ ${#zips[@]} -gt 0 ]; then
+            for z in "${zips[@]}"; do
+              echo "Aciliyor: $z"
+              unzip -o -q "$z" -d .
+              git rm -q -f "$z"
+            done
+            git config user.name "github-actions"
+            git config user.email "github-actions@users.noreply.github.com"
+            git add -A
+            git commit -m "ZIP acildi ve silindi" || true
+            git push || true
+          fi
+          ls -la
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: APK derle
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TvLauncher-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+
+      # Telefondan / TV'deki Downloader'dan dogrudan indirebilmen icin release'e de koy
+      - name: Release olustur
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: TV Launcher build ${{ github.run_number }}
+          files: app/build/outputs/apk/debug/app-debug.apk

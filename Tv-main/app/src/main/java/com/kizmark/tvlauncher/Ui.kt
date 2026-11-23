@@ -9,7 +9,13 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -66,6 +72,7 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.inset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -167,12 +174,21 @@ class KeyTrack {
 
 fun isOk(k: Key) = k == Key.DirectionCenter || k == Key.Enter || k == Key.NumPadEnter
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun tvKeys(onClick: () -> Unit, onLong: (() -> Unit)? = null): Modifier {
     val track = remember { KeyTrack() }
     val click = rememberUpdatedState(onClick)
     val longClick = rememberUpdatedState(onLong)
-    return Modifier.onPreviewKeyEvent { e ->
+    val interaction = remember { MutableInteractionSource() }
+    return Modifier
+        .combinedClickable(
+            interactionSource = interaction,
+            indication = null,
+            onClick = { click.value() },
+            onLongClick = if (onLong != null) ({ longClick.value?.invoke() }) else null
+        )
+        .onPreviewKeyEvent { e ->
         if (!isOk(e.key)) {
             false
         } else {
@@ -273,7 +289,7 @@ fun LauncherApp(st: LauncherState) {
         val density = LocalDensity.current.density
         val baker = remember { SceneBaker(ctx.applicationContext) }
         val bakeLock = remember { Mutex() }
-        LaunchedEffect(Unit) { if (st.wallItems.isEmpty()) st.initWallpapers(baker.availableWallpapers()) }
+        LaunchedEffect(Unit) { st.wallCount = baker.wallpaperNames().size }
 
         var home by remember { mutableStateOf<SceneSet?>(null) }
         var control by remember { mutableStateOf<SceneSet?>(null) }
@@ -341,15 +357,14 @@ fun LauncherApp(st: LauncherState) {
                 Modifier.fillMaxSize().drawBehind {
                     val a = ccAmt.value
                     val b = ambAmt.value
-                    val dst = IntSize(size.width.toInt().coerceAtLeast(1), size.height.toInt().coerceAtLeast(1))
                     if (homeImg == null) {
                         drawRect(Color.Black)
                     } else if (a < 1f && b < 1f) {
-                        drawImage(homeImg, dstSize = dst, filterQuality = FilterQuality.Medium)
+                        drawImage(homeImg)
                     }
-                    if (ctrlImg != null && a > 0f) drawImage(ctrlImg, dstSize = dst, alpha = a, filterQuality = FilterQuality.Medium)
+                    if (ctrlImg != null && a > 0f) drawImage(ctrlImg, alpha = a)
                     if (bareImg != null && b > 0f) {
-                        drawImage(bareImg, dstSize = dst, alpha = b, filterQuality = FilterQuality.Medium)
+                        drawImage(bareImg, alpha = b)
                         drawRect(Color.Black, alpha = 0.22f * b)
                     }
                 }
@@ -416,7 +431,7 @@ fun HomeUi(st: LauncherState, media: MediaInfo?, p: State<Float>, dockReq: Focus
             NowPlayingPill(media, Modifier.align(Alignment.TopStart).padding(start = 40.dp, top = 28.dp))
         }
 
-        var net by remember { mutableStateOf(NetInfo("Wi-Fi", "", Glyph.WIFI)) }
+        var net by remember { mutableStateOf(networkInfo(ctx)) }
         LaunchedEffect(st.resumed) {
             while (st.resumed) {
                 net = withContext(Dispatchers.IO) { networkInfo(ctx) }
@@ -425,14 +440,14 @@ fun HomeUi(st: LauncherState, media: MediaInfo?, p: State<Float>, dockReq: Focus
         }
 
         Row(
-            Modifier.align(Alignment.TopEnd).padding(end = 40.dp, top = 26.dp),
+            Modifier.align(Alignment.TopEnd).padding(end = 40.dp, top = 28.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             PillButton(net.glyph, net.title) { openSettings(ctx, Settings.ACTION_WIFI_SETTINGS) }
-            RoundButton(Glyph.SLIDERS, 42.dp) { st.overlay = Overlay.CONTROL }
-            RoundButton(Glyph.GRID, 42.dp) { st.overlay = Overlay.APPS }
-            RoundButton(Glyph.GEAR, 42.dp) { openSettings(ctx, Settings.ACTION_SETTINGS) }
+            RoundButton(Glyph.SLIDERS, 40.dp) { st.overlay = Overlay.CONTROL }
+            RoundButton(Glyph.GRID, 40.dp) { st.overlay = Overlay.APPS }
+            RoundButton(Glyph.GEAR, 40.dp) { openSettings(ctx, Settings.ACTION_SETTINGS) }
         }
 
         Dock(st, dockReq, w, h)
@@ -542,6 +557,35 @@ fun BoxScope.Dock(st: LauncherState, req: FocusRequester, w: Int, h: Int) {
                     else -> false
                 }
             }
+            .pointerInput(n, vis, stridePx) {
+                var acc = 0f
+                val stepPx = (stridePx * 0.45f).coerceAtLeast(40f)
+                detectHorizontalDragGestures(
+                    onDragStart = { acc = 0f },
+                    onDragEnd = { acc = 0f },
+                    onDragCancel = { acc = 0f },
+                    onHorizontalDrag = { _, dragAmount ->
+                        if (n > vis) {
+                            acc += dragAmount
+                            if (acc <= -stepPx) {
+                                val nextFirst = (st.dockFirst + 1).coerceAtMost((n - vis).coerceAtLeast(0))
+                                if (nextFirst != st.dockFirst) {
+                                    st.dockFirst = nextFirst
+                                    st.dockIndex = st.dockIndex.coerceIn(st.dockFirst, (st.dockFirst + vis - 1).coerceAtMost(n - 1))
+                                }
+                                acc = 0f
+                            } else if (acc >= stepPx) {
+                                val prevFirst = (st.dockFirst - 1).coerceAtLeast(0)
+                                if (prevFirst != st.dockFirst) {
+                                    st.dockFirst = prevFirst
+                                    st.dockIndex = st.dockIndex.coerceIn(st.dockFirst, (st.dockFirst + vis - 1).coerceAtMost(n - 1))
+                                }
+                                acc = 0f
+                            }
+                        }
+                    }
+                )
+            }
             .focusable()
     ) {
         // Kaydırılan şerit: sadece görünen pencerenin çevresi çizilir, hareket GPU'da (translationX)
@@ -557,7 +601,16 @@ fun BoxScope.Dock(st: LauncherState, req: FocusRequester, w: Int, h: Int) {
                                 item,
                                 xDp = 6f + i * (Dims.TILE_W + Dims.GAP),
                                 sel = focused && i == index,
-                                moving = st.moving && i == index
+                                moving = st.moving && i == index,
+                                onClick = {
+                                    st.dockIndex = i
+                                    if (st.moving) st.finishMove() else launch(i)
+                                },
+                                onLong = {
+                                    st.dockIndex = i
+                                    st.sheetFromDock = true
+                                    st.sheet = SheetKind.APP_MENU
+                                }
                             )
                         }
                     }
@@ -576,10 +629,36 @@ fun BoxScope.Dock(st: LauncherState, req: FocusRequester, w: Int, h: Int) {
             .width((Dims.DOCK_W + 56f).dp),
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Box(Modifier.size(18.dp).graphicsLayer { alpha = if (leftMore) 0.75f else 0f }) {
+        Box(
+            Modifier
+                .size(28.dp)
+                .graphicsLayer { alpha = if (leftMore) 0.8f else 0f }
+                .clickable(
+                    enabled = leftMore,
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {
+                    st.dockFirst = (st.dockFirst - 1).coerceAtLeast(0)
+                    st.dockIndex = st.dockIndex.coerceIn(st.dockFirst, (st.dockFirst + vis - 1).coerceAtMost((n - 1).coerceAtLeast(0)))
+                },
+            contentAlignment = Alignment.Center
+        ) {
             GlyphIcon(Glyph.LEFT, 18.dp, Color.White)
         }
-        Box(Modifier.size(18.dp).graphicsLayer { alpha = if (rightMore) 0.75f else 0f }) {
+        Box(
+            Modifier
+                .size(28.dp)
+                .graphicsLayer { alpha = if (rightMore) 0.8f else 0f }
+                .clickable(
+                    enabled = rightMore,
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {
+                    st.dockFirst = (st.dockFirst + 1).coerceAtMost((n - vis).coerceAtLeast(0))
+                    st.dockIndex = st.dockIndex.coerceIn(st.dockFirst, (st.dockFirst + vis - 1).coerceAtMost((n - 1).coerceAtLeast(0)))
+                },
+            contentAlignment = Alignment.Center
+        ) {
             GlyphIcon(Glyph.RIGHT, 18.dp, Color.White)
         }
     }
@@ -603,23 +682,38 @@ fun BoxScope.Dock(st: LauncherState, req: FocusRequester, w: Int, h: Int) {
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun DockTile(item: AppItem, xDp: Float, sel: Boolean, moving: Boolean) {
+fun DockTile(
+    item: AppItem,
+    xDp: Float,
+    sel: Boolean,
+    moving: Boolean,
+    onClick: () -> Unit,
+    onLong: () -> Unit
+) {
     val accent = LocalAccent.current
-    val z = animateFloatAsState(
+    val z by animateFloatAsState(
         if (sel) 1.08f else 1f,
         spring(dampingRatio = 0.72f, stiffness = 650f),
         label = "tile"
     )
-    val lift = animateFloatAsState(if (moving) 1f else 0f, tween(160), label = "lift")
+    val lift by animateFloatAsState(if (moving) 1f else 0f, tween(160), label = "lift")
+    val interaction = remember { MutableInteractionSource() }
     Box(
         Modifier
             .offset(x = xDp.dp, y = Dims.PAD.dp)
             .size(Dims.TILE_W.dp, Dims.TILE_H.dp)
+            .combinedClickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick,
+                onLongClick = onLong
+            )
             .graphicsLayer {
-                scaleX = z.value
-                scaleY = z.value
-                translationY = -lift.value * 7.dp.toPx()
+                scaleX = z
+                scaleY = z
+                translationY = -lift * 7.dp.toPx()
             }
             .drawBehind {
                 val r = CornerRadius(size.height * 0.16f)
@@ -647,55 +741,41 @@ fun DockTile(item: AppItem, xDp: Float, sel: Boolean, moving: Boolean) {
                         cornerRadius = r
                     )
                 }
+                if (moving) {
+                    val s = 16.dp.toPx()
+                    inset(-s - 4.dp.toPx(), (size.height - s) / 2f, size.width + 4.dp.toPx(), (size.height - s) / 2f) {
+                        drawGlyph(Glyph.LEFT, Color.White)
+                    }
+                    inset(size.width + 4.dp.toPx(), (size.height - s) / 2f, -s - 4.dp.toPx(), (size.height - s) / 2f) {
+                        drawGlyph(Glyph.RIGHT, Color.White)
+                    }
+                }
             }
-    ) {
-        if (moving) {
-            GlyphIcon(Glyph.LEFT, 16.dp, Color.White, Modifier.align(Alignment.CenterStart).offset(x = (-20).dp))
-            GlyphIcon(Glyph.RIGHT, 16.dp, Color.White, Modifier.align(Alignment.CenterEnd).offset(x = 20.dp))
-        }
-    }
+    )
 }
 
 @Composable
 fun PillButton(glyph: Glyph, text: String, onClick: () -> Unit) {
-    val accent = LocalAccent.current
     var f by remember { mutableStateOf(false) }
-    val z = animateFloatAsState(if (f) 1.08f else 1f, spring(dampingRatio = 0.72f, stiffness = 680f), label = "pill")
-    val shape = RoundedCornerShape(21.dp)
+    val z by animateFloatAsState(if (f) 1.08f else 1f, spring(dampingRatio = 0.7f, stiffness = 700f), label = "pill")
     Row(
         Modifier
-            .height(42.dp)
-            .graphicsLayer { scaleX = z.value; scaleY = z.value }
-            .drawBehind {
-                if (f) {
-                    val g = 5.dp.toPx()
-                    drawRoundRect(
-                        accent.copy(alpha = 0.28f),
-                        topLeft = Offset(-g, -g),
-                        size = Size(size.width + 2 * g, size.height + 2 * g),
-                        cornerRadius = CornerRadius(size.height / 2f + g)
-                    )
-                }
-            }
-            .clip(shape)
-            .background(if (f) Color.White else Color(0x700E1420))
-            .border(
-                1.dp,
-                if (f) Brush.verticalGradient(listOf(Color.White, Color.White))
-                else Brush.verticalGradient(listOf(Color(0x66FFFFFF), Color(0x1CFFFFFF))),
-                shape
-            )
+            .height(40.dp)
+            .graphicsLayer { scaleX = z; scaleY = z }
+            .clip(RoundedCornerShape(20.dp))
+            .background(if (f) Color.White else Color(0x38FFFFFF))
+            .border(1.dp, Color(0x40FFFFFF), RoundedCornerShape(20.dp))
             .onFocusChanged { f = it.isFocused }
             .then(tvKeys(onClick))
             .focusable()
-            .padding(horizontal = 15.dp),
+            .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        GlyphIcon(glyph, 18.dp, if (f) INK else Color(0xF5FFFFFF))
+        GlyphIcon(glyph, 17.dp, if (f) INK else Color.White)
         Spacer(Modifier.width(8.dp))
         BasicText(
             text,
-            style = TextStyle(color = if (f) INK else Color(0xF5FFFFFF), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            style = TextStyle(color = if (f) INK else Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         )
     }
 }
@@ -705,36 +785,25 @@ fun RoundButton(
     glyph: Glyph,
     size: Dp,
     requester: FocusRequester? = null,
-    idleBg: Color = Color(0x700E1420),
+    idleBg: Color = Color(0x38FFFFFF),
     onClick: () -> Unit
 ) {
-    val accent = LocalAccent.current
     var f by remember { mutableStateOf(false) }
-    val z = animateFloatAsState(if (f) 1.12f else 1f, spring(dampingRatio = 0.68f, stiffness = 680f), label = "round")
+    val z by animateFloatAsState(if (f) 1.12f else 1f, spring(dampingRatio = 0.65f, stiffness = 700f), label = "round")
     Box(
         Modifier
             .size(size)
-            .graphicsLayer { scaleX = z.value; scaleY = z.value }
-            .drawBehind {
-                if (f) {
-                    drawCircle(accent.copy(alpha = 0.30f), radius = this.size.minDimension / 2f + 5.dp.toPx())
-                }
-            }
+            .graphicsLayer { scaleX = z; scaleY = z }
             .clip(CircleShape)
             .background(if (f) Color.White else idleBg)
-            .border(
-                1.dp,
-                if (f) Brush.verticalGradient(listOf(Color.White, Color.White))
-                else Brush.verticalGradient(listOf(Color(0x66FFFFFF), Color(0x1CFFFFFF))),
-                CircleShape
-            )
+            .border(1.dp, if (f) Color.White else Color(0x40FFFFFF), CircleShape)
             .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
             .onFocusChanged { f = it.isFocused }
             .then(tvKeys(onClick))
             .focusable(),
         contentAlignment = Alignment.Center
     ) {
-        GlyphIcon(glyph, size * 0.46f, if (f) INK else Color(0xF5FFFFFF))
+        GlyphIcon(glyph, size * 0.44f, if (f) INK else Color.White)
     }
 }
 
@@ -844,13 +913,13 @@ fun AppsOverlay(st: LauncherState, p: State<Float>) {
 @Composable
 fun GridTile(item: AppItem, hidden: Boolean, requester: FocusRequester?, onClick: () -> Unit, onLong: () -> Unit) {
     var f by remember { mutableStateOf(false) }
-    val z = animateFloatAsState(if (f) 1.1f else 1f, spring(dampingRatio = 0.72f, stiffness = 650f), label = "grid")
+    val z by animateFloatAsState(if (f) 1.1f else 1f, spring(dampingRatio = 0.72f, stiffness = 650f), label = "grid")
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier
                 .fillMaxWidth()
                 .height(Dims.TILE_H.dp)
-                .graphicsLayer { scaleX = z.value; scaleY = z.value; alpha = if (hidden && !f) 0.55f else 1f }
+                .graphicsLayer { scaleX = z; scaleY = z; alpha = if (hidden && !f) 0.55f else 1f }
                 .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
                 .onFocusChanged { f = it.isFocused }
                 .then(tvKeys(onClick, onLong))
@@ -867,22 +936,15 @@ fun GridTile(item: AppItem, hidden: Boolean, requester: FocusRequester?, onClick
                         drawRoundRect(Color(0x33FFFFFF), cornerRadius = r)
                     }
                     if (f) drawRoundRect(Color.White, style = Stroke(2.5.dp.toPx()), cornerRadius = r)
+                    if (hidden) {
+                        val s = 18.dp.toPx()
+                        inset(size.width - s - 6.dp.toPx(), 6.dp.toPx(), 6.dp.toPx(), size.height - s - 6.dp.toPx()) {
+                            drawCircle(Color(0xCC000000), radius = s * 0.62f)
+                            drawGlyph(Glyph.EYE_OFF, Color.White)
+                        }
+                    }
                 }
-        ) {
-            if (hidden) {
-                Box(
-                    Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(6.dp)
-                        .size(22.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xCC000000)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    GlyphIcon(Glyph.EYE_OFF, 14.dp, Color.White)
-                }
-            }
-        }
+        )
         Spacer(Modifier.height(7.dp))
         BasicText(
             item.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -919,11 +981,11 @@ fun ControlPanel(st: LauncherState, media: MediaInfo?, p: State<Float>, thumb: I
     }
 
     // Durumlar panel açılınca bir kez okunur
-    var net by remember { mutableStateOf(NetInfo("Wi-Fi", "", Glyph.WIFI)) }
+    var net by remember { mutableStateOf(networkInfo(ctx)) }
     var audio by remember { mutableStateOf("") }
     var bt by remember { mutableStateOf<Boolean?>(null) }
     var ram by remember { mutableStateOf(0L) }
-    var sleepLeft by remember { mutableStateOf(0) }
+    var sleepLeft by remember { mutableStateOf(SleepTimer.remainingMin(ctx)) }
     var sources by remember { mutableStateOf<List<TvSource>>(emptyList()) }
     val notifVersion = NotifBus.version
     var notifCount by remember { mutableStateOf(0) }
@@ -933,7 +995,6 @@ fun ControlPanel(st: LauncherState, media: MediaInfo?, p: State<Float>, thumb: I
             audio = audioInfo(ctx)
             bt = bluetoothOn(ctx)
             ram = freeRamMb(ctx)
-            sleepLeft = SleepTimer.remainingMin(ctx)
             sources = tvSources(ctx)
         }
         if (st.prefs.adbReady()) st.sys = withContext(Dispatchers.IO) { SysToggles.query(ctx) }
@@ -988,7 +1049,7 @@ fun ControlPanel(st: LauncherState, media: MediaInfo?, p: State<Float>, thumb: I
             ) {
                 if (media != null) MediaCard(media)
 
-                val curWallName = st.currentWallpaperName()
+                val names = remember { SceneBaker(ctx.applicationContext).wallpaperNames() }
                 TileRow {
                     CcTile(
                         net.glyph, net.title, net.sub, on = net.sub != "Bağlı değil", requester = first,
@@ -1037,10 +1098,9 @@ fun ControlPanel(st: LauncherState, media: MediaInfo?, p: State<Float>, thumb: I
                 }
                 TileRow {
                     CcTile(
-                        Glyph.IMAGE, "Duvar kağıdı",
-                        if (st.randomWall) "Rastgele · $curWallName" else curWallName,
-                        on = if (st.randomWall) true else null, thumb = thumb, modifier = Modifier.weight(1f)
-                    ) { st.sheet = SheetKind.WALLPAPER }
+                        Glyph.IMAGE, "Duvar kağıdı", names[st.wallIndex % names.size],
+                        on = null, thumb = thumb, modifier = Modifier.weight(1f)
+                    ) { st.nextWallpaper() }
                     CcTile(
                         Glyph.TYPE, "Saat stili", if (st.boldClock) "Kalın" else "İnce",
                         on = null, modifier = Modifier.weight(1f)
@@ -1130,7 +1190,7 @@ fun CcTile(
 ) {
     val accent = LocalAccent.current
     var f by remember { mutableStateOf(false) }
-    val z = animateFloatAsState(if (f) 1.04f else 1f, spring(dampingRatio = 0.7f, stiffness = 700f), label = "cc")
+    val z by animateFloatAsState(if (f) 1.04f else 1f, spring(dampingRatio = 0.7f, stiffness = 700f), label = "cc")
     val shape = RoundedCornerShape(22.dp)
     val bg = when {
         f -> Color(0xF2FFFFFF)
@@ -1145,7 +1205,7 @@ fun CcTile(
     Row(
         modifier
             .height(66.dp)
-            .graphicsLayer { scaleX = z.value; scaleY = z.value }
+            .graphicsLayer { scaleX = z; scaleY = z }
             .clip(shape)
             .background(bg)
             .border(1.dp, edge, shape)
@@ -1322,39 +1382,6 @@ fun SheetLayer(st: LauncherState, p: State<Float>) {
                 }
                 rows += SheetRow(Glyph.INFO, "Uygulama bilgisi") { done { openAppInfo(ctx, a.pkg) } }
                 if (!a.system) rows += SheetRow(Glyph.TRASH, "Kaldır") { done { uninstallApp(ctx, a.pkg) } }
-            }
-        }
-        SheetKind.WALLPAPER -> {
-            title = "Duvar kağıdı"
-            val items = st.wallItems
-            val activeIdx = if (items.isEmpty()) 0 else ((st.wallIndex % items.size) + items.size) % items.size
-            val curName = st.currentWallpaperName()
-            rows += SheetRow(
-                if (st.randomWall) Glyph.CHECK else Glyph.SHUFFLE,
-                "Her açılışta rastgele",
-                if (st.randomWall) "Aktif · Şu an: $curName (bas: değiştir)" else "Her açılışta farklı duvar kağıdı"
-            ) {
-                done {
-                    st.enableRandomWallpaper()
-                    st.say("Rastgele: ${st.currentWallpaperName()}")
-                }
-            }
-            items.forEachIndexed { i, item ->
-                val pinned = !st.randomWall && i == activeIdx
-                val showingNow = st.randomWall && i == activeIdx
-                val parts = ArrayList<String>()
-                if (item.supportsDepth) parts += "Derinlik destekli"
-                if (pinned) parts += "Seçili" else if (showingNow) parts += "Şu an açık"
-                rows += SheetRow(
-                    if (pinned) Glyph.CHECK else Glyph.IMAGE,
-                    item.name,
-                    parts.joinToString(" · ")
-                ) {
-                    done {
-                        st.selectWallpaper(i)
-                        st.say("Duvar kağıdı: ${item.name}")
-                    }
-                }
             }
         }
     }

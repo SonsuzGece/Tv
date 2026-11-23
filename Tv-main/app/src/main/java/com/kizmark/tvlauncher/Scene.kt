@@ -13,7 +13,6 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.os.Build
-import androidx.annotation.DrawableRes
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Canvas as GCanvas
 import androidx.compose.ui.graphics.Color
@@ -28,12 +27,11 @@ import androidx.compose.ui.unit.LayoutDirection
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.roundToInt
 
 /**
- * HIZIN SIRRI: duvar kağıdı + saat + ön plan derinliği + dock camı tek bir resme "pişirilir".
- * 4K TV'lerde bile pişirme çözünürlüğü 1920x1080 ile sınırlandırılır; GPU donanımsal ölçekleme
- * yapar, böylece bellek kullanımı %75 azalır ve geçişler kasmadan 60fps akar.
+ * HIZIN SIRRI: duvar kağıdı + saat + kayalar + dock camı tek bir resme "pişirilir".
+ * Ekran her karede sadece bu tek resmi çizer; gölgeli yazı, gradyan ve bulanıklık her karede
+ * yeniden hesaplanmaz. Resim dakikada bir, arka planda yeniden pişirilir.
  */
 object Dims {
     const val TILE_W = 136f
@@ -46,8 +44,6 @@ object Dims {
     const val DOCK_BOTTOM = 42f
     const val DOCK_RADIUS = 30f
     const val CLOCK_BASELINE = 0.50f
-    const val MAX_BAKE_W = 1920
-    const val MAX_BAKE_H = 1080
 }
 
 enum class SceneKind { HOME, CONTROL, BARE }
@@ -67,11 +63,18 @@ class SceneBaker(private val ctx: Context) {
     private var fg: Bitmap? = null
     private var glass: Bitmap? = null
     private var accent: Color = Color(0xFF34D399)
-    private var currentItem: WallpaperItem = WALLPAPER_CATALOG.first()
+    private var hasCustom: Boolean? = null
 
-    fun availableWallpapers(): List<WallpaperItem> = WALLPAPER_CATALOG
+    fun customAvailable(): Boolean {
+        val h = hasCustom
+        if (h != null) return h
+        val v = ctx.resources.getIdentifier("wallpaper", "drawable", ctx.packageName) != 0
+        hasCustom = v
+        return v
+    }
 
-    fun wallpaperNames(): List<String> = WALLPAPER_CATALOG.map { it.name }
+    fun wallpaperNames(): List<String> =
+        if (customAvailable()) listOf("Fotoğraf") + WALLPAPER_NAMES else WALLPAPER_NAMES
 
     /** Uygulama açıkken bellek boşaltılır; sadece son pişmiş ekran resmi kalır. */
     fun release() {
@@ -81,38 +84,35 @@ class SceneBaker(private val ctx: Context) {
         srcKey = ""
     }
 
-    private fun ensureSources(bw: Int, bh: Int, wall: Int, depth: Boolean) {
-        val key = "$bw:$bh:$wall:$depth"
+    private fun ensureSources(w: Int, h: Int, wall: Int, depth: Boolean, density: Float) {
+        val key = "$w:$h:$wall:$depth"
         if (key == srcKey && base != null) return
-        val items = WALLPAPER_CATALOG
-        val idx = ((wall % items.size) + items.size) % items.size
-        val item = items[idx]
-        currentItem = item
+        val names = wallpaperNames()
+        val idx = wall % names.size
+        val style = if (customAvailable()) idx - 1 else idx
         val b: Bitmap
         var f: Bitmap? = null
-        if (item.drawableRes != 0) {
-            b = decodeCrop(item.drawableRes, bw, bh, false) ?: renderProcedural(0, bw, bh, 0)
-            if (depth && item.fgDrawableRes != 0) {
-                f = decodeCrop(item.fgDrawableRes, bw, bh, true)
-            }
+        if (style < 0) {
+            b = decodeCrop("wallpaper", w, h, false) ?: renderProcedural(0, w, h, 0)
+            if (depth) f = decodeCrop("wallpaper_fg", w, h, true)
             accent = accentFromBitmap(b)
         } else {
-            val style = item.proceduralStyle.coerceAtLeast(0)
-            b = renderProcedural(style, bw, bh, 0)
-            if (depth && hasProceduralDepth(style)) f = renderProcedural(style, bw, bh, 1)
+            b = renderProcedural(style, w, h, 0)
+            if (depth && hasProceduralDepth(style)) f = renderProcedural(style, w, h, 1)
             accent = WALLPAPER_ACCENTS.getOrElse(style) { Color(0xFF34D399) }
         }
         base = b
         fg = f
-        glass = makeGlass(b, f, bw, bh)
+        glass = makeGlass(b, f, w, h)
         srcKey = key
     }
 
-    private fun decodeCrop(@DrawableRes resId: Int, w: Int, h: Int, alpha: Boolean): Bitmap? {
+    private fun decodeCrop(name: String, w: Int, h: Int, alpha: Boolean): Bitmap? {
         return try {
-            if (resId == 0) return null
+            val id = ctx.resources.getIdentifier(name, "drawable", ctx.packageName)
+            if (id == 0) return null
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeResource(ctx.resources, resId, bounds)
+            BitmapFactory.decodeResource(ctx.resources, id, bounds)
             var sample = 1
             while (bounds.outWidth / (sample * 2) >= w && bounds.outHeight / (sample * 2) >= h) sample *= 2
             val opts = BitmapFactory.Options().apply {
@@ -120,7 +120,7 @@ class SceneBaker(private val ctx: Context) {
                 inScaled = false
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             }
-            val raw = BitmapFactory.decodeResource(ctx.resources, resId, opts) ?: return null
+            val raw = BitmapFactory.decodeResource(ctx.resources, id, opts) ?: return null
             val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             val c = Canvas(out)
             val scale = maxOf(w / raw.width.toFloat(), h / raw.height.toFloat())
@@ -145,17 +145,17 @@ class SceneBaker(private val ctx: Context) {
         return img.asAndroidBitmap()
     }
 
-    /** Cam yüzeyler için: küçük çözünürlüklü (en fazla 144x81) hızlı bulanık kopya. */
+    /** Cam yüzeyler için: sahnenin 1/8 boyutunda, bulanıklaştırılmış hali. */
     private fun makeGlass(b: Bitmap, f: Bitmap?, w: Int, h: Int): Bitmap {
-        val ratio = minOf(144f / w.coerceAtLeast(1), 81f / h.coerceAtLeast(1), 1f / 8f)
-        val sw = (w * ratio).roundToInt().coerceAtLeast(16)
-        val sh = (h * ratio).roundToInt().coerceAtLeast(9)
+        val sw = (w / 8).coerceAtLeast(16)
+        val sh = (h / 8).coerceAtLeast(9)
         val small = Bitmap.createBitmap(sw, sh, Bitmap.Config.ARGB_8888)
         val c = Canvas(small)
         val p = Paint(Paint.FILTER_BITMAP_FLAG)
         val dst = Rect(0, 0, sw, sh)
         c.drawBitmap(b, null, dst, p)
         if (f != null) c.drawBitmap(f, null, dst, p)
+        boxBlur(small, 3)
         boxBlur(small, 3)
         boxBlur(small, 2)
         return small
@@ -202,22 +202,17 @@ class SceneBaker(private val ctx: Context) {
 
     /** Tüm sahneyi pişirir. Arka plan iş parçacığında çağrılmalı. */
     fun bake(kind: SceneKind, w: Int, h: Int, density: Float, wall: Int, bold: Boolean, depth: Boolean): SceneSet {
-        val scale = minOf(1f, Dims.MAX_BAKE_W / w.toFloat(), Dims.MAX_BAKE_H / h.toFloat())
-        val bw = (w * scale).roundToInt().coerceAtLeast(16)
-        val bh = (h * scale).roundToInt().coerceAtLeast(9)
-        val bd = density * scale
-
-        ensureSources(bw, bh, wall, depth)
+        ensureSources(w, h, wall, depth, density)
         val b = base!!
-        val out = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val c = Canvas(out)
         c.drawBitmap(b, 0f, 0f, null)
         val f = fg
-        if (f != null) drawHorizonGlow(c, bw, bh)
-        drawClock(c, bw, bh, bd, bold, kind == SceneKind.CONTROL, currentItem)
+        if (f != null) drawHorizonGlow(c, w, h)
+        drawClock(c, w, h, density, bold, kind == SceneKind.CONTROL)
         if (f != null) c.drawBitmap(f, 0f, 0f, null)
-        drawScrims(c, bw, bh)
-        if (kind == SceneKind.HOME) drawDockGlass(c, bw, bh, bd)
+        drawScrims(c, w, h)
+        if (kind == SceneKind.HOME) drawDockGlass(c, w, h, density)
         out.setHasAlpha(false)
         out.prepareToDraw()
         val g = glass!!
@@ -251,13 +246,13 @@ class SceneBaker(private val ctx: Context) {
         }
     }
 
-    private fun drawClock(c: Canvas, w: Int, h: Int, d: Float, bold: Boolean, compact: Boolean, item: WallpaperItem) {
+    private fun drawClock(c: Canvas, w: Int, h: Int, d: Float, bold: Boolean, compact: Boolean) {
         val now = Date()
         val time = SimpleDateFormat("HH:mm", tr).format(now)
         val date = SimpleDateFormat("EEEE, d MMMM", tr).format(now)
         val size = w * (if (bold) 0.20f else 0.17f)
-        val baseline = if (compact) h * Dims.CLOCK_BASELINE else h * item.clockY
-        val cx = if (compact) w * 0.50f else w * item.clockX
+        val baseline = h * Dims.CLOCK_BASELINE
+        val cx = w / 2f
 
         c.save()
         if (compact) {
@@ -313,7 +308,7 @@ class SceneBaker(private val ctx: Context) {
         c.drawRect(0f, y, w.toFloat(), h.toFloat(), p)
     }
 
-    /** Dock'un buzlu cam zemini: yazılım gölge filtresi yerine hızlı çok katmanlı gölge kullanır. */
+    /** Dock'un buzlu cam zemini: tamamen resmin içinde, ekranda hiçbir maliyeti yok. */
     private fun drawDockGlass(c: Canvas, w: Int, h: Int, d: Float) {
         val g = glass ?: return
         val dw = Dims.DOCK_W * d
@@ -323,18 +318,11 @@ class SceneBaker(private val ctx: Context) {
         val rect = RectF(left, top, left + dw, top + dh)
         val r = Dims.DOCK_RADIUS * d
 
-        // Hızlı yumuşak gölge (CPU blur olmadan)
+        // yumuşak gölge
         val sh = Paint(Paint.ANTI_ALIAS_FLAG)
-        val offsets = floatArrayOf(12f, 7f, 3f)
-        val alphas = intArrayOf(0x18000000, 0x24000000, 0x30000000)
-        for (i in offsets.indices) {
-            val pad = offsets[i] * d
-            sh.color = alphas[i]
-            c.drawRoundRect(
-                RectF(rect.left - pad, rect.top + pad * 0.35f, rect.right + pad, rect.bottom + pad * 1.15f),
-                r + pad * 0.5f, r + pad * 0.5f, sh
-            )
-        }
+        sh.color = 0x00000000
+        sh.setShadowLayer(26f * d, 0f, 10f * d, 0x66000000)
+        c.drawRoundRect(rect, r, r, sh)
 
         val path = Path().apply { addRoundRect(rect, r, r, Path.Direction.CW) }
         c.save()
@@ -368,9 +356,8 @@ class SceneBaker(private val ctx: Context) {
 
 /** Fotoğraftaki baskın canlı rengi bulur; arayüzün vurgu rengi olur. */
 fun accentFromBitmap(image: Bitmap): Color {
-    var small: Bitmap? = null
     return try {
-        small = Bitmap.createScaledBitmap(image, 48, 27, true)
+        val small = Bitmap.createScaledBitmap(image, 48, 27, true)
         val hsv = FloatArray(3)
         var sx = 0.0
         var sy = 0.0
@@ -394,7 +381,5 @@ fun accentFromBitmap(image: Bitmap): Color {
         }
     } catch (e: Throwable) {
         Color(0xFF34D399)
-    } finally {
-        small?.recycle()
     }
 }
