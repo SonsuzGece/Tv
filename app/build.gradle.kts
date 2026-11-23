@@ -11,8 +11,8 @@ android {
         applicationId = "com.kizmark.tvlauncher"
         minSdk = 28
         targetSdk = 34
-        versionCode = 6
-        versionName = "4.0"
+        versionCode = 7
+        versionName = "5.0"
     }
 
     // Sabit imza: her derleme aynı anahtarla imzalanır, güncellemeler üstüne kurulur

@@ -15,9 +15,10 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlin.math.abs
+import kotlin.random.Random
 
 enum class Overlay { NONE, APPS, CONTROL }
-enum class SheetKind { INPUTS, NOTIFS, POWER, APP_MENU }
+enum class SheetKind { INPUTS, NOTIFS, POWER, APP_MENU, WALLPAPER }
 
 class LauncherState(val ctx: Context) {
     val prefs = Prefs(ctx)
@@ -41,6 +42,8 @@ class LauncherState(val ctx: Context) {
     var moving by mutableStateOf(false)
 
     var wallIndex by mutableIntStateOf(prefs.wallpaper())
+    var randomWall by mutableStateOf(prefs.randomWall())
+    var wallItems by mutableStateOf<List<WallpaperItem>>(emptyList())
     var boldClock by mutableStateOf(prefs.boldClock())
     var depth by mutableStateOf(prefs.depth())
     var wallCount = 1
@@ -53,6 +56,54 @@ class LauncherState(val ctx: Context) {
     var refocusTick by mutableIntStateOf(0)
 
     var lastInput = System.currentTimeMillis()
+
+    fun initWallpapers(items: List<WallpaperItem>) {
+        wallItems = items
+        wallCount = items.size.coerceAtLeast(1)
+        if (randomWall) {
+            pickRandomWallpaper()
+        } else {
+            wallIndex = ((wallIndex % wallCount) + wallCount) % wallCount
+        }
+    }
+
+    /** Rastgele havuzdan bir öncekiyle farklı bir duvar kağıdı seçer. */
+    fun pickRandomWallpaper() {
+        val items = wallItems
+        if (items.isEmpty()) return
+        val pool = items.indices.filter { items[it].inRandomPool }.ifEmpty { items.indices.toList() }
+        val last = prefs.lastRandomWall()
+        val candidates = if (pool.size > 1) {
+            pool.filter { it != last && it != wallIndex }.ifEmpty { pool.filter { it != last } }
+        } else {
+            pool
+        }
+        val chosen = candidates[Random.nextInt(candidates.size)]
+        wallIndex = chosen
+        prefs.saveLastRandomWall(chosen)
+    }
+
+    fun selectWallpaper(index: Int) {
+        val count = wallCount.coerceAtLeast(1)
+        val idx = ((index % count) + count) % count
+        randomWall = false
+        prefs.saveRandomWall(false)
+        wallIndex = idx
+        prefs.saveWallpaper(idx)
+    }
+
+    fun enableRandomWallpaper() {
+        randomWall = true
+        prefs.saveRandomWall(true)
+        pickRandomWallpaper()
+    }
+
+    fun currentWallpaperName(): String {
+        val items = wallItems
+        if (items.isEmpty()) return ""
+        val idx = ((wallIndex % items.size) + items.size) % items.size
+        return items[idx].name
+    }
 
     /** Uygulama listesi değişince sırayı günceller: yeni uygulamalar sona eklenir. */
     fun syncOrder(list: List<AppItem>) {
@@ -111,8 +162,11 @@ class LauncherState(val ctx: Context) {
     }
 
     fun nextWallpaper() {
-        wallIndex = (wallIndex + 1) % wallCount.coerceAtLeast(1)
-        prefs.saveWallpaper(wallIndex)
+        val count = wallCount.coerceAtLeast(1)
+        val next = (wallIndex + 1) % count
+        selectWallpaper(next)
+        val name = currentWallpaperName()
+        if (name.isNotEmpty()) say("Duvar kağıdı: $name")
     }
 
     fun toggleDepth() {
@@ -161,9 +215,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val screenOnReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (st.randomWall) st.pickRandomWallpaper()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         st = LauncherState(applicationContext)
+        st.initWallpapers(WALLPAPER_CATALOG)
         addOnNewIntentListener { st.goHome() }
         if (Config.PREFER_4K) requestBestDisplayMode()
         setContent { LauncherApp(st) }
@@ -177,15 +238,19 @@ class MainActivity : ComponentActivity() {
             addAction(Intent.ACTION_PACKAGE_REPLACED)
             addDataScheme("package")
         }
+        val screenFilter = IntentFilter(Intent.ACTION_SCREEN_ON)
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(packageReceiver, filter, Context.RECEIVER_EXPORTED)
+            registerReceiver(screenOnReceiver, screenFilter, Context.RECEIVER_EXPORTED)
         } else {
             registerReceiver(packageReceiver, filter)
+            registerReceiver(screenOnReceiver, screenFilter)
         }
     }
 
     override fun onDestroy() {
         runCatching { unregisterReceiver(packageReceiver) }
+        runCatching { unregisterReceiver(screenOnReceiver) }
         super.onDestroy()
     }
 

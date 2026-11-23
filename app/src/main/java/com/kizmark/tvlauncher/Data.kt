@@ -164,6 +164,7 @@ object AppRepo {
             val icon = ai.loadIcon(pm)
             val iconBmp = icon.toBitmap(96, 96)
             val base = dominantColor(iconBmp)
+            iconBmp.recycle()
             val p = Paint(Paint.ANTI_ALIAS_FLAG)
             p.shader = LinearGradient(
                 0f, 0f, 0f, h.toFloat(),
@@ -282,6 +283,12 @@ class Prefs(ctx: Context) {
 
     fun wallpaper(): Int = sp.getInt("wall", 0)
     fun saveWallpaper(index: Int) = sp.edit().putInt("wall", index).apply()
+
+    fun randomWall(): Boolean = sp.getBoolean("wall_random", true)
+    fun saveRandomWall(on: Boolean) = sp.edit().putBoolean("wall_random", on).apply()
+
+    fun lastRandomWall(): Int = sp.getInt("wall_last_rand", -1)
+    fun saveLastRandomWall(index: Int) = sp.edit().putInt("wall_last_rand", index).apply()
 
     fun boldClock(): Boolean = sp.getBoolean("bold", true)
     fun saveBoldClock(bold: Boolean) = sp.edit().putBoolean("bold", bold).apply()
