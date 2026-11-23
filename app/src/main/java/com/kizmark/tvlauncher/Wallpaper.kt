@@ -48,12 +48,7 @@ val WALLPAPER_CATALOG = listOf(
     WallpaperItem("luffy", "Mavi Ada", R.drawable.wp_luffy, 0, clockX = 0.50f, clockY = 0.43f, inRandomPool = true),
     WallpaperItem("dubai", "Dubai", R.drawable.wp_dubai, R.drawable.wp_dubai_fg, clockX = 0.50f, clockY = 0.49f, inRandomPool = true),
     WallpaperItem("mountain", "Gece Dağı", R.drawable.wp_mountain, R.drawable.wp_mountain_fg, clockX = 0.50f, clockY = 0.40f, inRandomPool = true),
-    WallpaperItem("knight", "Şövalye", R.drawable.wp_knight, 0, clockX = 0.69f, clockY = 0.40f, inRandomPool = true),
-    WallpaperItem("rocks", "Kaya Gölü", R.drawable.wallpaper, R.drawable.wallpaper_fg, clockX = 0.50f, clockY = 0.50f, inRandomPool = true),
-    WallpaperItem("night_lake", "Gece gölü", proceduralStyle = 0, inRandomPool = false),
-    WallpaperItem("aurora", "Aurora", proceduralStyle = 1, inRandomPool = false),
-    WallpaperItem("sunset", "Gün batımı", proceduralStyle = 2, inRandomPool = false),
-    WallpaperItem("deep_blue", "Derin mavi", proceduralStyle = 3, inRandomPool = false)
+    WallpaperItem("knight", "Şövalye", R.drawable.wp_knight, 0, clockX = 0.69f, clockY = 0.40f, inRandomPool = true)
 )
 
 val WALLPAPER_NAMES = listOf("Gece gölü", "Aurora", "Gün batımı", "Derin mavi")
