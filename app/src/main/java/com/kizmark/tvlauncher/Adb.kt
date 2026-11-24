@@ -3,6 +3,7 @@ package com.kizmark.tvlauncher
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.util.Base64
 import java.io.DataInputStream
 import java.io.File
 import java.io.OutputStream
@@ -13,7 +14,6 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.KeyPairGenerator
 import java.security.interfaces.RSAPrivateCrtKey
-import android.util.Base64
 
 /**
  * TV'nin kendi ağ hata ayıklamasına (127.0.0.1:5555) bağlanan küçük ADB istemcisi.
@@ -211,6 +211,8 @@ object SysToggles {
 
     private const val KATNISS = "com.google.android.katniss/.search.serviceapi.KatnissVoiceInteractionService"
 
+    class HomeResult(val ok: Boolean, val msg: String)
+
     /** Her grubun açık olup olmadığı. Bağlanamazsa null. */
     fun query(ctx: Context): Map<String, Boolean>? {
         val out = Adb.exec(ctx, "pm list packages -d; echo ===; pm list packages", allowPrompt = false) ?: return null
@@ -223,8 +225,6 @@ object SysToggles {
             present.isNotEmpty() && present.any { it !in disabled }
         }
     }
-
-    class HomeResult(val ok: Boolean, val msg: String)
 
     /** Sistemin Home tuşu şu an bu launcher'a mı yönleniyor? (ADB gerektirmez) */
     fun isDefaultHome(ctx: Context): Boolean {
@@ -251,16 +251,11 @@ object SysToggles {
     fun repairHome(ctx: Context, allowPrompt: Boolean = true, allowDisableGtv: Boolean = true): HomeResult {
         val pkg = ctx.packageName
         val act = "$pkg/.MainActivity"
-        val gtvPkg = GROUPS[GTV]!!.first()
 
-        // 1) Önce Google TV'ye dokunmadan RoleManager + set-home-activity dene
         val cmd1 = buildString {
-            append("cmd role add-role-holder --user 0 android.app.role.HOME ").append(pkg).append(" 2>&1
-")
-            append("cmd package set-home-activity --user 0 ").append(act).append(" 2>&1
-")
-            append("echo ===HOME===
-")
+            appendLine("cmd role add-role-holder --user 0 android.app.role.HOME $pkg 2>&1")
+            appendLine("cmd package set-home-activity --user 0 $act 2>&1")
+            appendLine("echo ===HOME===")
             append("cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME 2>&1")
         }
         val out1 = Adb.exec(ctx, cmd1, allowPrompt)
@@ -270,12 +265,10 @@ object SysToggles {
             return HomeResult(true, "Home tuşu bu launcher'a bağlandı")
         }
 
-        // 2) Eğer Google TV (launcherx) hala Home'u tutuyorsa güvenli sırayla kapatıp doğrula
         if (!allowDisableGtv) {
             return HomeResult(false, "Home şu an: ${res1.substringBefore("/")}")
         }
-        val r = disableGtvSafely(ctx, allowPrompt)
-        return r
+        return disableGtvSafely(ctx, allowPrompt)
     }
 
     /** Google TV ekranını güvenli biçimde kapatır; Home bize geçmezse anında geri açar. */
@@ -284,16 +277,11 @@ object SysToggles {
         val act = "$pkg/.MainActivity"
         val gtvPkg = GROUPS[GTV]!!.first()
         val cmd = buildString {
-            append("cmd role add-role-holder --user 0 android.app.role.HOME ").append(pkg).append(" 2>&1
-")
-            append("pm disable-user --user 0 ").append(gtvPkg).append(" 2>&1
-")
-            append("cmd role add-role-holder --user 0 android.app.role.HOME ").append(pkg).append(" 2>&1
-")
-            append("cmd package set-home-activity --user 0 ").append(act).append(" 2>&1
-")
-            append("echo ===HOME===
-")
+            appendLine("cmd role add-role-holder --user 0 android.app.role.HOME $pkg 2>&1")
+            appendLine("pm disable-user --user 0 $gtvPkg 2>&1")
+            appendLine("cmd role add-role-holder --user 0 android.app.role.HOME $pkg 2>&1")
+            appendLine("cmd package set-home-activity --user 0 $act 2>&1")
+            appendLine("echo ===HOME===")
             append("cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME 2>&1")
         }
         val out = Adb.exec(ctx, cmd, allowPrompt)
@@ -302,9 +290,11 @@ object SysToggles {
         if (res.contains(pkg) || isDefaultHome(ctx)) {
             return HomeResult(true, "Home tuşu aktif (Google TV kapatıldı)")
         }
-        // Güvenlik geri alması: TV asla Home'suz veya RecoveryActivity'de kalmasın
-        Adb.exec(ctx, "pm enable --user 0 $gtvPkg 2>&1
-pm enable $gtvPkg 2>&1", allowPrompt = false)
+        val rollback = buildString {
+            appendLine("pm enable --user 0 $gtvPkg 2>&1")
+            append("pm enable $gtvPkg 2>&1")
+        }
+        Adb.exec(ctx, rollback, allowPrompt = false)
         val blocker = res.substringBefore("/").ifBlank { "bilinmiyor" }
         return HomeResult(false, "Güvenlik: Home doğrulanamadı ($blocker), Google TV geri açıldı")
     }
@@ -317,15 +307,12 @@ pm enable $gtvPkg 2>&1", allowPrompt = false)
                 val pkg = ctx.packageName
                 val act = "$pkg/.MainActivity"
                 val cmd = buildString {
-                    append("pm enable --user 0 ").append(gtvPkg).append(" 2>&1
-")
-                    append("pm enable ").append(gtvPkg).append(" 2>&1
-")
-                    append("cmd role add-role-holder --user 0 android.app.role.HOME ").append(pkg).append(" 2>&1
-")
-                    append("cmd package set-home-activity --user 0 ").append(act).append(" 2>&1")
+                    appendLine("pm enable --user 0 $gtvPkg 2>&1")
+                    appendLine("pm enable $gtvPkg 2>&1")
+                    appendLine("cmd role add-role-holder --user 0 android.app.role.HOME $pkg 2>&1")
+                    append("cmd package set-home-activity --user 0 $act 2>&1")
                 }
-                val out = Adb.exec(ctx, cmd) ?: return HomeResult(false, "ADB bağlanamadı: Ağ hata ayıklama açık mı?")
+                Adb.exec(ctx, cmd) ?: return HomeResult(false, "ADB bağlanamadı: Ağ hata ayıklama açık mı?")
                 HomeResult(true, "Google TV ekranı açıldı")
             } else {
                 disableGtvSafely(ctx, allowPrompt = true)
@@ -333,14 +320,11 @@ pm enable $gtvPkg 2>&1", allowPrompt = false)
         }
         val sb = StringBuilder()
         for (p in pkgs) {
-            sb.append(if (on) "pm enable --user 0 $p" else "pm disable-user --user 0 $p").append(" 2>&1
-")
+            sb.appendLine(if (on) "pm enable --user 0 $p 2>&1" else "pm disable-user --user 0 $p 2>&1")
         }
         if (group == ASSIST && on) {
-            sb.append("settings put secure assistant ").append(KATNISS).append(" 2>&1
-")
-            sb.append("settings put secure voice_interaction_service ").append(KATNISS).append(" 2>&1
-")
+            sb.appendLine("settings put secure assistant $KATNISS 2>&1")
+            sb.appendLine("settings put secure voice_interaction_service $KATNISS 2>&1")
         }
         val res = Adb.exec(ctx, sb.toString())
             ?: return HomeResult(false, "ADB bağlanamadı: Ağ hata ayıklama açık mı?")
