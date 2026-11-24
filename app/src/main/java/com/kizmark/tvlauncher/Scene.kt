@@ -261,8 +261,8 @@ class SceneBaker(private val ctx: Context) {
 
         c.save()
         if (compact) {
-            c.translate(-0.23f * w, 0.04f * h)
-            c.scale(0.8f, 0.8f, cx, baseline)
+            c.translate(-0.22f * w, 0.03f * h)
+            c.scale(0.68f, 0.68f, cx, baseline)
         }
 
         val tp = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG)

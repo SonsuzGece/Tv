@@ -249,7 +249,7 @@ class MainActivity : ComponentActivity() {
 
         // APK güncellemesinden sonra Android varsayılan Home kaydını sıfırlayabilir; sessizce onar
         if (st.prefs.adbReady() && !SysToggles.isDefaultHome(applicationContext)) {
-            Thread { SysToggles.repairHome(applicationContext, allowPrompt = false) }.start()
+            Thread { SysToggles.repairHome(applicationContext, allowPrompt = false, allowDisableGtv = false) }.start()
         }
     }
 

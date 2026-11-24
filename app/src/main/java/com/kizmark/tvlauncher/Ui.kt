@@ -1005,16 +1005,15 @@ fun ControlPanel(st: LauncherState, media: MediaInfo?, p: State<Float>, thumb: I
             st.adbBusy = true
             if (!st.prefs.adbReady()) st.say("TV'de çıkan pencerede 'Her zaman izin ver'i seç")
             val cur = st.sys?.get(group) ?: true
-            val ok = withContext(Dispatchers.IO) { SysToggles.set(ctx, group, !cur) }
-            if (ok) {
-                st.sys = withContext(Dispatchers.IO) { SysToggles.query(ctx) }
-                isHome = withContext(Dispatchers.IO) { SysToggles.isDefaultHome(ctx) }
+            val res = withContext(Dispatchers.IO) { SysToggles.set(ctx, group, !cur) }
+            st.sys = withContext(Dispatchers.IO) { SysToggles.query(ctx) }
+            isHome = withContext(Dispatchers.IO) { SysToggles.isDefaultHome(ctx) }
+            if (res.msg.isNotEmpty()) {
+                st.say(res.msg)
+            } else if (res.ok) {
                 st.say(if (cur) "$name kapatıldı" else "$name açıldı")
-            } else if (group == SysToggles.GTV && cur) {
-                isHome = withContext(Dispatchers.IO) { SysToggles.isDefaultHome(ctx) }
-                st.say("Güvenlik: Home doğrulanamadı, Google TV açık bırakıldı")
             } else {
-                st.say("Bağlanamadı: Ağ hata ayıklama açık mı?")
+                st.say("İşlem tamamlanamadı")
             }
             st.adbBusy = false
         }
@@ -1153,9 +1152,10 @@ fun ControlPanel(st: LauncherState, media: MediaInfo?, p: State<Float>, thumb: I
                             scope.launch {
                                 st.adbBusy = true
                                 if (!st.prefs.adbReady()) st.say("TV'de çıkan pencerede 'Her zaman izin ver'i seç")
-                                val ok = withContext(Dispatchers.IO) { SysToggles.repairHome(ctx) }
+                                val res = withContext(Dispatchers.IO) { SysToggles.repairHome(ctx, allowPrompt = true, allowDisableGtv = true) }
+                                st.sys = withContext(Dispatchers.IO) { SysToggles.query(ctx) }
                                 isHome = withContext(Dispatchers.IO) { SysToggles.isDefaultHome(ctx) }
-                                st.say(if (ok) "Home tuşu bu launcher'a bağlandı" else "Bağlanamadı: Ağ hata ayıklama açık mı?")
+                                st.say(res.msg)
                                 st.adbBusy = false
                             }
                         }
