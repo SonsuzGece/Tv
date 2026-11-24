@@ -246,6 +246,18 @@ class MainActivity : ComponentActivity() {
             registerReceiver(packageReceiver, filter)
             registerReceiver(screenOnReceiver, screenFilter)
         }
+
+        // APK güncellemesinden sonra Android varsayılan Home kaydını sıfırlayabilir; sessizce onar
+        if (st.prefs.adbReady() && !SysToggles.isDefaultHome(applicationContext)) {
+            Thread { SysToggles.repairHome(applicationContext, allowPrompt = false) }.start()
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && ::st.isInitialized) {
+            st.refocusTick += 1
+        }
     }
 
     override fun onDestroy() {

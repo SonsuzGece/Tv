@@ -1,6 +1,8 @@
 package com.kizmark.tvlauncher
 
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import java.io.DataInputStream
 import java.io.File
 import java.io.OutputStream
@@ -222,19 +224,68 @@ object SysToggles {
         }
     }
 
+    /** Sistemin Home tuşu şu an bu launcher'a mı yönleniyor? (ADB gerektirmez) */
+    fun isDefaultHome(ctx: Context): Boolean {
+        return try {
+            val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            val ri = ctx.packageManager.resolveActivity(i, PackageManager.MATCH_DEFAULT_ONLY)
+            ri?.activityInfo?.packageName == ctx.packageName
+        } catch (e: Throwable) {
+            false
+        }
+    }
+
+    /**
+     * Android 10-14 Google TV'de Home tuşunu hem RoleManager hem PackageManager üzerinden
+     * güvenli biçimde bu launcher'a bağlar ve gerçekten yönlendiğini doğrular.
+     */
+    fun repairHome(ctx: Context, allowPrompt: Boolean = true): Boolean {
+        val pkg = ctx.packageName
+        val act = "$pkg/.MainActivity"
+        Adb.exec(ctx, "cmd role add-role-holder --user 0 android.app.role.HOME $pkg", allowPrompt) ?: return false
+        Adb.exec(ctx, "cmd package set-home-activity --user 0 $act", allowPrompt)
+        val resolved = Adb.exec(
+            ctx,
+            "cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME",
+            allowPrompt
+        ) ?: ""
+        return resolved.contains(pkg) || isDefaultHome(ctx)
+    }
+
     fun set(ctx: Context, group: String, on: Boolean): Boolean {
         val pkgs = GROUPS[group] ?: return false
-        val cmds = ArrayList<String>()
-        for (p in pkgs) cmds += if (on) "pm enable $p" else "pm disable-user --user 0 $p"
+        if (group == GTV) {
+            val gtvPkg = pkgs.first()
+            return if (on) {
+                // Google TV ekranını aç, ama Home tuşunu yine bu launcher'da kilitle ki donan seçici çıkmasın
+                Adb.exec(ctx, "pm enable --user 0 $gtvPkg") ?: return false
+                Adb.exec(ctx, "pm enable $gtvPkg")
+                repairHome(ctx, allowPrompt = false)
+                true
+            } else {
+                // ÖNCE Home rolünü bu launcher'a ver, SONRA Google TV'yi kapat, ARDINDAN doğrula.
+                // Doğrulama başarısızsa (RecoveryActivity/FallbackHome riski) anında geri aç!
+                if (!repairHome(ctx, allowPrompt = true)) return false
+                Adb.exec(ctx, "pm disable-user --user 0 $gtvPkg") ?: return false
+                val ok = repairHome(ctx, allowPrompt = false)
+                if (!ok) {
+                    Adb.exec(ctx, "pm enable --user 0 $gtvPkg", allowPrompt = false)
+                    Adb.exec(ctx, "pm enable $gtvPkg", allowPrompt = false)
+                    return false
+                }
+                true
+            }
+        }
+        for (p in pkgs) {
+            val cmd = if (on) "pm enable --user 0 $p" else "pm disable-user --user 0 $p"
+            val res = Adb.exec(ctx, cmd) ?: return false
+            if (res.contains("Exception")) return false
+        }
         if (group == ASSIST && on) {
-            cmds += "settings put secure assistant $KATNISS"
-            cmds += "settings put secure voice_interaction_service $KATNISS"
+            Adb.exec(ctx, "settings put secure assistant $KATNISS")
+            Adb.exec(ctx, "settings put secure voice_interaction_service $KATNISS")
         }
-        if (group == GTV && !on) {
-            cmds += "cmd package set-home-activity ${ctx.packageName}/.MainActivity"
-        }
-        val res = Adb.exec(ctx, cmds.joinToString("; ")) ?: return false
-        return !res.contains("Exception")
+        return true
     }
 
     /** Arka planda bekleyen uygulamaları kapatır, boşalan RAM'i (MB) döndürür. */

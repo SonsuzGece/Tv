@@ -393,16 +393,12 @@ fun LauncherApp(st: LauncherState) {
                 ToastPill(st.toast ?: "", p)
             }
 
-            // Odak: ana ekrana dönünce dock
-            LaunchedEffect(homeVisible, st.homeTick, st.resumed) {
-                if (homeVisible && st.resumed) {
-                    delay(20)
+            // Odak: ana ekrana dönünce veya pencere odağı geri gelince dock'a kesin odaklan
+            LaunchedEffect(homeVisible, st.homeTick, st.resumed, st.refocusTick) {
+                if (homeVisible && st.resumed && st.sheet == null) {
+                    delay(40)
                     safeFocus(dockReq)
-                }
-            }
-            LaunchedEffect(st.refocusTick) {
-                if (st.refocusTick > 0 && st.overlay == Overlay.NONE && st.sheet == null) {
-                    delay(20)
+                    delay(140)
                     safeFocus(dockReq)
                 }
             }
@@ -983,6 +979,7 @@ fun ControlPanel(st: LauncherState, media: MediaInfo?, p: State<Float>, thumb: I
     var bt by remember { mutableStateOf<Boolean?>(null) }
     var ram by remember { mutableStateOf(0L) }
     var sleepLeft by remember { mutableStateOf(0) }
+    var isHome by remember { mutableStateOf(true) }
     var sources by remember { mutableStateOf<List<TvSource>>(emptyList()) }
     val notifVersion = NotifBus.version
     var notifCount by remember { mutableStateOf(0) }
@@ -993,6 +990,7 @@ fun ControlPanel(st: LauncherState, media: MediaInfo?, p: State<Float>, thumb: I
             bt = bluetoothOn(ctx)
             ram = freeRamMb(ctx)
             sleepLeft = SleepTimer.remainingMin(ctx)
+            isHome = SysToggles.isDefaultHome(ctx)
             sources = tvSources(ctx)
         }
         if (st.prefs.adbReady()) st.sys = withContext(Dispatchers.IO) { SysToggles.query(ctx) }
@@ -1010,7 +1008,11 @@ fun ControlPanel(st: LauncherState, media: MediaInfo?, p: State<Float>, thumb: I
             val ok = withContext(Dispatchers.IO) { SysToggles.set(ctx, group, !cur) }
             if (ok) {
                 st.sys = withContext(Dispatchers.IO) { SysToggles.query(ctx) }
+                isHome = withContext(Dispatchers.IO) { SysToggles.isDefaultHome(ctx) }
                 st.say(if (cur) "$name kapatıldı" else "$name açıldı")
+            } else if (group == SysToggles.GTV && cur) {
+                isHome = withContext(Dispatchers.IO) { SysToggles.isDefaultHome(ctx) }
+                st.say("Güvenlik: Home doğrulanamadı, Google TV açık bırakıldı")
             } else {
                 st.say("Bağlanamadı: Ağ hata ayıklama açık mı?")
             }
@@ -1143,9 +1145,27 @@ fun ControlPanel(st: LauncherState, media: MediaInfo?, p: State<Float>, thumb: I
                 }
                 TileRow {
                     CcTile(
-                        Glyph.HOME, "Google TV ekranı", sysSub(SysToggles.GTV),
+                        Glyph.HOME, "Home tuşu",
+                        if (isHome) "Bu launcher aktif" else "Dokun: onar",
+                        on = isHome, modifier = Modifier.weight(1f)
+                    ) {
+                        if (!st.adbBusy) {
+                            scope.launch {
+                                st.adbBusy = true
+                                if (!st.prefs.adbReady()) st.say("TV'de çıkan pencerede 'Her zaman izin ver'i seç")
+                                val ok = withContext(Dispatchers.IO) { SysToggles.repairHome(ctx) }
+                                isHome = withContext(Dispatchers.IO) { SysToggles.isDefaultHome(ctx) }
+                                st.say(if (ok) "Home tuşu bu launcher'a bağlandı" else "Bağlanamadı: Ağ hata ayıklama açık mı?")
+                                st.adbBusy = false
+                            }
+                        }
+                    }
+                    CcTile(
+                        Glyph.TV, "Google TV ekranı", sysSub(SysToggles.GTV),
                         on = st.sys?.get(SysToggles.GTV) == true, modifier = Modifier.weight(1f)
                     ) { adbToggle(SysToggles.GTV, "Google TV ekranı") }
+                }
+                TileRow {
                     CcTile(
                         Glyph.BELL, "Bildirimler",
                         if (!hasMediaAccess(ctx)) "İzin yok" else if (notifCount == 0) "Yok" else "$notifCount yeni",
