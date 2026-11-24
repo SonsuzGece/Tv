@@ -206,7 +206,10 @@ object SysToggles {
             "com.mediatek.miracast"
         ),
         ASSIST to listOf("com.google.android.katniss"),
-        GTV to listOf("com.google.android.apps.tv.launcherx")
+        GTV to listOf(
+            "com.google.android.apps.tv.launcherx",
+            "com.google.android.tungsten.setupwraith"
+        )
     )
 
     private const val KATNISS = "com.google.android.katniss/.search.serviceapi.KatnissVoiceInteractionService"
@@ -271,14 +274,17 @@ object SysToggles {
         return disableGtvSafely(ctx, allowPrompt)
     }
 
-    /** Google TV ekranını güvenli biçimde kapatır; Home bize geçmezse anında geri açar. */
+    /**
+     * Google TV (launcherx) ve onun yedek Home yakalayıcısını (setupwraith) tek bağlantıda
+     * güvenli sırayla kapatır; Home bu launcher'a geçmezse her ikisini de anında geri açar.
+     */
     fun disableGtvSafely(ctx: Context, allowPrompt: Boolean = true): HomeResult {
         val pkg = ctx.packageName
         val act = "$pkg/.MainActivity"
-        val gtvPkg = GROUPS[GTV]!!.first()
+        val gtvPkgs = GROUPS[GTV]!!
         val cmd = buildString {
             appendLine("cmd role add-role-holder --user 0 android.app.role.HOME $pkg 2>&1")
-            appendLine("pm disable-user --user 0 $gtvPkg 2>&1")
+            for (p in gtvPkgs) appendLine("pm disable-user --user 0 $p 2>&1")
             appendLine("cmd role add-role-holder --user 0 android.app.role.HOME $pkg 2>&1")
             appendLine("cmd package set-home-activity --user 0 $act 2>&1")
             appendLine("echo ===HOME===")
@@ -291,8 +297,10 @@ object SysToggles {
             return HomeResult(true, "Home tuşu aktif (Google TV kapatıldı)")
         }
         val rollback = buildString {
-            appendLine("pm enable --user 0 $gtvPkg 2>&1")
-            append("pm enable $gtvPkg 2>&1")
+            for (p in gtvPkgs) {
+                appendLine("pm enable --user 0 $p 2>&1")
+                appendLine("pm enable $p 2>&1")
+            }
         }
         Adb.exec(ctx, rollback, allowPrompt = false)
         val blocker = res.substringBefore("/").ifBlank { "bilinmiyor" }
@@ -302,13 +310,14 @@ object SysToggles {
     fun set(ctx: Context, group: String, on: Boolean): HomeResult {
         val pkgs = GROUPS[group] ?: return HomeResult(false, "Bilinmeyen ayar")
         if (group == GTV) {
-            val gtvPkg = pkgs.first()
             return if (on) {
                 val pkg = ctx.packageName
                 val act = "$pkg/.MainActivity"
                 val cmd = buildString {
-                    appendLine("pm enable --user 0 $gtvPkg 2>&1")
-                    appendLine("pm enable $gtvPkg 2>&1")
+                    for (p in pkgs) {
+                        appendLine("pm enable --user 0 $p 2>&1")
+                        appendLine("pm enable $p 2>&1")
+                    }
                     appendLine("cmd role add-role-holder --user 0 android.app.role.HOME $pkg 2>&1")
                     append("cmd package set-home-activity --user 0 $act 2>&1")
                 }
